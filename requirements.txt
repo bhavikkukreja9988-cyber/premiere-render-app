@@ -1,0 +1,4 @@
+PySide6>=6.8,<7
+watchdog>=6,<7
+pytest>=8,<9
+pyinstaller>=6,<7
