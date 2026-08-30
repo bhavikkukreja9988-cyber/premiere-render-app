@@ -1,0 +1,5 @@
+{
+  "root_working_tree": "MVP implementation already present on main",
+  "preserved_source": "archive/latest_source",
+  "purpose": "Preserve the supplied later source package without overwriting the fuller MVP implementation."
+}
