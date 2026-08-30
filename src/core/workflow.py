@@ -1,49 +1,66 @@
+"""High-level workflow state shared by the UI and the core.
+
+The MVP shipped this as a stub (an ``Idle`` string). It is now a small, real
+state machine with immutable snapshots, which is what the UI binds to and what
+``tests/test_core.py`` exercises.
+"""
+
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
-from threading import Lock
-from typing import Callable
+from typing import Callable, List, Optional
 
 
 class WorkflowState(str, Enum):
     IDLE = "Idle"
     CONNECTING = "Connecting"
+    SCANNING = "Scanning"
     TRANSFERRING = "Transferring"
-    RECEIVING = "Receiving"
+    QUEUED = "Queued"
     RENDERING = "Rendering"
     RETURNING = "Returning"
-    COMPLETED = "Completed"
-    ERROR = "Error"
+    COMPLETE = "Complete"
+    FAILED = "Failed"
+    CANCELLED = "Cancelled"
 
 
 @dataclass(frozen=True)
 class WorkflowSnapshot:
     state: WorkflowState
     message: str = ""
-    progress: int = 0
+    progress: int = 0            # 0..100
+    at: float = 0.0
 
 
 class Workflow:
+    """Thread-safe current-state holder with change notification."""
+
     def __init__(self) -> None:
-        self._snapshot = WorkflowSnapshot(WorkflowState.IDLE)
-        self._lock = Lock()
-        self._listeners: list[Callable[[WorkflowSnapshot], None]] = []
+        self._lock = threading.RLock()
+        self._snapshot = WorkflowSnapshot(WorkflowState.IDLE, "", 0, time.time())
+        self._listeners: List[Callable[[WorkflowSnapshot], None]] = []
 
-    def subscribe(self, listener: Callable[[WorkflowSnapshot], None]) -> None:
+    def subscribe(self, callback: Callable[[WorkflowSnapshot], None]) -> None:
         with self._lock:
-            self._listeners.append(listener)
+            self._listeners.append(callback)
 
-    def update(self, state: WorkflowState | str, message: str = "", progress: int | None = None) -> WorkflowSnapshot:
-        if not isinstance(state, WorkflowState):
-            state = WorkflowState(state)
+    def update(self, state: WorkflowState, message: str = "",
+               progress: Optional[int] = None) -> WorkflowSnapshot:
         with self._lock:
-            old = self._snapshot
-            snapshot = WorkflowSnapshot(state, message, old.progress if progress is None else max(0, min(100, progress)))
-            self._snapshot = snapshot
+            if progress is None:
+                progress = self._snapshot.progress
+            progress = max(0, min(100, int(progress)))
+            self._snapshot = WorkflowSnapshot(state, message, progress, time.time())
             listeners = list(self._listeners)
-        for listener in listeners:
-            listener(snapshot)
+            snapshot = self._snapshot
+        for callback in listeners:
+            try:
+                callback(snapshot)
+            except Exception:
+                pass
         return snapshot
 
     def get(self) -> WorkflowSnapshot:
