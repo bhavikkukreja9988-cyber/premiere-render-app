@@ -54,14 +54,12 @@ def new_pairing_code() -> str:
 
 @dataclass
 class AppConfig:
-    # shared
-    role: str = "sender"                       # last-used tab
+    role: str = "sender"
     tcp_port: int = 49872
     discovery_port: int = 49873
     chunk_size: int = 1024 * 1024
     log_level: str = "INFO"
 
-    # station
     station_name: str = field(default_factory=default_station_name)
     workspace_dir: str = field(default_factory=lambda: str(default_workspace()))
     require_pairing: bool = True
@@ -72,17 +70,25 @@ class AppConfig:
     default_preset: str = ""
     render_timeout_minutes: int = 720
     keep_completed_jobs: int = 25
+    retention_days: int = 0
 
-    # sender
     last_project_folder: str = ""
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     last_station_host: str = ""
     sender_name: str = field(default_factory=default_station_name)
     delete_remote_after_return: bool = False
 
+    start_with_windows: bool = False
+    first_run: bool = True
+
     @property
     def workspace(self) -> Path:
         return Path(self.workspace_dir)
+
+    RETENTION_CHOICES = (
+        ("Never", 0), ("1 day", 1), ("3 days", 3), ("7 days", 7),
+        ("14 days", 14), ("30 days", 30),
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
