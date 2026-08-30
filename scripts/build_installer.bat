@@ -96,7 +96,7 @@ exit /b 0
 :testfail
 echo.
 echo [FAIL] Automated tests did not pass. The build was stopped so you do not
-more ship a broken app. Send the messages above to your developer.
+ship a broken app. Send the messages above to your developer.
 call deactivate >nul 2>&1
 pause
 exit /b 1
