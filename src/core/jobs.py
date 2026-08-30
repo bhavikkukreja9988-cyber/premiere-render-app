@@ -34,11 +34,11 @@ class JobSpec:
 
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     name: str = "untitled"
-    project_relpath: str = ""          # e.g. "MyEdit/MyEdit.prproj"
-    sequence: str = ""                 # empty -> station renders the first sequence
-    preset_source: str = "station"     # "station" | "attached" | "default"
-    preset_ref: str = ""               # preset name, or relpath of an attached .epr
-    output_name: str = ""              # without extension; defaults to the job name
+    project_relpath: str = ""
+    sequence: str = ""
+    preset_source: str = "station"
+    preset_ref: str = ""
+    output_name: str = ""
     container: str = ".mp4"
     sender_name: str = ""
     file_count: int = 0
@@ -65,13 +65,17 @@ class JobSpec:
 class JobRecord:
     spec: JobSpec
     state: JobState = JobState.CREATED
-    progress: float = 0.0              # 0..1 for the current phase
+    progress: float = 0.0
     message: str = ""
     error: str = ""
     bytes_received: int = 0
     output_path: str = ""
     updated_at: float = field(default_factory=time.time)
     history: List[Dict[str, Any]] = field(default_factory=list)
+    seq: int = 0
+    label: str = ""
+    started_at: float = 0.0
+    completed_at: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +87,10 @@ class JobRecord:
             "bytes_received": self.bytes_received,
             "output_path": self.output_path,
             "updated_at": self.updated_at,
+            "seq": self.seq,
+            "label": self.label,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
             "history": self.history[-40:],
         }
 
@@ -98,29 +106,40 @@ class JobRecord:
             output_path=str(d.get("output_path", "")),
             updated_at=float(d.get("updated_at", time.time())),
             history=list(d.get("history", [])),
+            seq=int(d.get("seq", 0)),
+            label=str(d.get("label", "")),
+            started_at=float(d.get("started_at", 0.0)),
+            completed_at=float(d.get("completed_at", 0.0)),
         )
 
     @property
     def job_id(self) -> str:
         return self.spec.job_id
 
+    @property
+    def display_label(self) -> str:
+        return self.label or f"Job-{self.job_id[:8]}"
+
 
 class JobStore:
-    """Thread-safe job table with crash-safe JSON persistence.
+    """Thread-safe job table with crash-safe JSON persistence."""
 
-    The station keeps its queue here so a restart mid-batch does not lose
-    jobs that have already been transferred.
-    """
-
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Optional[Path] = None,
+                 jobs_root: Optional[Path] = None) -> None:
         self._path = Path(path) if path else None
+        if jobs_root is not None:
+            self._jobs_root: Optional[Path] = Path(jobs_root)
+        elif self._path is not None:
+            self._jobs_root = self._path.parent / "jobs"
+        else:
+            self._jobs_root = None
         self._lock = threading.RLock()
         self._jobs: Dict[str, JobRecord] = {}
+        self._counter = 0
         self._listeners: List[Callable[[JobRecord], None]] = []
         if self._path and self._path.exists():
             self.load()
 
-    # -- listeners --------------------------------------------------------
     def subscribe(self, callback: Callable[[JobRecord], None]) -> None:
         with self._lock:
             self._listeners.append(callback)
@@ -129,14 +148,19 @@ class JobStore:
         for callback in list(self._listeners):
             try:
                 callback(record)
-            except Exception:  # a broken UI listener must never kill a render
+            except Exception:
                 pass
 
-    # -- access -----------------------------------------------------------
     def add(self, record: JobRecord) -> JobRecord:
         with self._lock:
+            if record.seq <= 0:
+                self._counter += 1
+                record.seq = self._counter
+            if not record.label:
+                record.label = f"Job-{record.seq:03d}"
             self._jobs[record.job_id] = record
             self._save_locked()
+            self._write_state_json(record)
         self._notify(record)
         return record
 
@@ -146,8 +170,7 @@ class JobStore:
 
     def list(self) -> List[JobRecord]:
         with self._lock:
-            return sorted(self._jobs.values(),
-                          key=lambda r: r.spec.created_at, reverse=True)
+            return sorted(self._jobs.values(), key=lambda r: r.spec.created_at, reverse=True)
 
     def remove(self, job_id: str) -> None:
         with self._lock:
@@ -172,6 +195,10 @@ class JobStore:
                 record.state = state
                 record.history.append({"t": time.time(), "state": state.value,
                                        "message": message or ""})
+                if state is JobState.RENDERING and not record.started_at:
+                    record.started_at = time.time()
+                if state.terminal and not record.completed_at:
+                    record.completed_at = time.time()
             if progress is not None:
                 record.progress = max(0.0, min(1.0, progress))
             if message is not None:
@@ -184,20 +211,30 @@ class JobStore:
                 record.output_path = output_path
             record.updated_at = time.time()
             self._save_locked()
+            self._write_state_json(record)
         self._notify(record)
         return record
 
-    # -- persistence ------------------------------------------------------
+    def _write_state_json(self, record: JobRecord) -> None:
+        if self._jobs_root is None or not record.label:
+            return
+        try:
+            job_dir = self._jobs_root / record.label
+            job_dir.mkdir(parents=True, exist_ok=True)
+            tmp = job_dir / "state.json.tmp"
+            tmp.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
+            tmp.replace(job_dir / "state.json")
+        except OSError:
+            pass
+
     def _save_locked(self) -> None:
         if not self._path:
             return
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps([r.to_dict() for r in self._jobs.values()], indent=2),
-                encoding="utf-8",
-            )
+            tmp.write_text(json.dumps([r.to_dict() for r in self._jobs.values()], indent=2),
+                           encoding="utf-8")
             tmp.replace(self._path)
         except OSError:
             pass
@@ -215,9 +252,8 @@ class JobStore:
                     record = JobRecord.from_dict(item)
                 except Exception:
                     continue
-                # A job that was mid-render when the app closed cannot be
-                # resumed inside Media Encoder, so re-queue it.
                 if record.state in (JobState.RENDERING, JobState.RETURNING):
                     record.state = JobState.QUEUED
                     record.message = "re-queued after restart"
                 self._jobs[record.job_id] = record
+                self._counter = max(self._counter, record.seq)
