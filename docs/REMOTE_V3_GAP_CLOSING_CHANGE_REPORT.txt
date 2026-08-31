@@ -1,56 +1,43 @@
-CHANGE REPORT — Premiere Render App — REMOTE V3 (gap-closing round)
+CHANGE REPORT — Premiere Render App — Remote V3 cleanup round
 
 SUMMARY
-This round closes four specific gaps identified in the previous Remote V3 milestone:
+The latest Remote V3 handoff was uploaded to `feature/v3-supabase-remote`. This cleanup pass removes contradictory Remote V3 documentation and removes legacy LAN controls from the normal Settings UI.
 
-1. Friendly user-facing errors: raw backend exceptions are no longer the intended UI message source when a curated message exists.
-2. Manual job approval: the Render Station now has a visible pending-jobs banner with Accept/Reject actions when automatic acceptance is disabled.
-3. First-run setup: one guided wizard now handles sign-in, role choice (Sender / Render Station / Both), and Render Station basics.
-4. Large-file transfer: cloud file upload/download is chunked and resumable so multi-gigabyte Premiere media can recover after interruption.
+CLEANUP CHANGES
+1. `README.md` now describes Supabase-based remote operation as the primary architecture.
+2. `AI_DEVELOPER_GUIDE.md` now states the Remote V3 rules and explicitly labels the old LAN implementation as migration/reference only.
+3. `docs/ARCHITECTURE.md` now documents Sender -> Supabase -> Render Station.
+4. `docs/PROTOCOL.md` now documents the Remote V3 control/file planes and labels the old TCP/UDP protocol as legacy.
+5. `docs/SETUP_WINDOWS.md` now describes remote setup without IP entry or port forwarding.
+6. `src/ui/main_window.py` status messaging no longer claims that both PCs must be on the same network.
+7. `src/ui/settings_panel.py` no longer exposes pairing-code/LAN controls in the normal Settings UI.
+8. `docs/REMOTE_V3_CLEANUP.md` records the migration rules and remaining verification work.
 
-FILES ADDED IN THIS ROUND
-src/remote/chunked_transfer.py
-src/ui/pending_jobs_panel.py
-src/ui/setup_wizard.py
-tests/test_chunked_transfer.py
+AUTHENTICATION
+The intended user-facing authentication is username + password only. The current Supabase implementation internally maps usernames to synthetic email identities; the synthetic email is not shown to users.
 
-FILES MODIFIED IN THIS ROUND
-src/remote/transport.py
-src/remote/sender_service.py
-src/remote/station_worker.py
-src/remote/storage.py
-src/core/config.py
-src/ui/settings_panel.py
-src/ui/main_window.py
-tests/test_remote_pipeline.py
-tests/test_remote_jobs.py
-tests/test_remote_auth_stations.py
-tests/test_manifest.py
+REMOTE UX INVARIANTS
+- Sender and Render Station may be on different networks/locations.
+- No normal-use IP entry.
+- No normal-use port entry.
+- No pairing code.
+- No Go Online / Go Offline buttons in the final product.
+- Render Station is online while FileSender is open and offline after it closes.
+- Send is disabled when the selected Render Station is offline.
+- The same Premiere project can be submitted repeatedly as separate jobs.
 
-TESTS
-Reported by the AI handoff: 99 automated tests, all passing.
+LEGACY CODE
+`src/network/` and related legacy configuration remain temporarily for migration/reference. They are not the Remote V3 transport and must not be extended as the primary architecture. Before final release, isolate or remove the legacy path from the normal UI.
 
-Run:
-    python -m unittest discover -s tests -t .
+TEST STATUS
+The previous AI handoff reported 99 automated tests passing. This cleanup pass was documentation/UI synchronization only and does not constitute live testing.
 
-The UI remains unverified on a real Windows desktop. The live Supabase project, real multi-gigabyte internet transfer, real Adobe Media Encoder integration, and two-network end-to-end workflow still require testing.
-
-INSTALLER
-No installer changes were required in this round. Rebuild with:
-    scripts\\build_installer.bat
-
-SUPABASE / STORAGE
-No database schema changes were reported in this round. The resumable transfer layer uses the existing project-files and render-results buckets under job-specific paths.
-
-KNOWN LIMITATIONS
-- Not yet verified against the live Supabase project.
-- Chunking performance on real multi-gigabyte internet transfers is untested.
-- UI additions have not been visually verified on Windows.
-- Sign-out/restart behavior still has a known limitation.
-- Legacy LAN-only behavior is not the final remote architecture.
-- Real Windows, Adobe Media Encoder, and two-network testing remain required.
-
-MANUAL STEPS
-Use docs/SUPABASE_SETUP.md for Supabase setup.
-Use scripts\\build_installer.bat for the Windows installer.
-Use docs/SETUP_WINDOWS.md for Adobe Media Encoder setup.
+STILL REQUIRED
+- Live Supabase test
+- Username/password test
+- Two different networks
+- Real large-file resumable transfer
+- Offline Send button behavior
+- Real Windows UI test
+- Real Premiere Pro / Adobe Media Encoder test
+- Full FileSender.exe install/uninstall/end-to-end test
