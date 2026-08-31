@@ -1,18 +1,7 @@
 """Main window: one application, two roles — now cloud-connected.
 
-On launch this tries to build a Supabase-backed remote client, restore a saved
-session or ask the user to sign in, and — if signed in — start the cloud
-render-station worker automatically (no "Go Online" button; being open is
-being online, per the remote plan). The legacy same-network Sender/Render
-Station tabs are kept for backward compatibility but are clearly labelled
-"(Legacy)", and the legacy Render Station is disabled while the cloud worker
-owns the same local job workspace, to avoid two render queues fighting over
-one folder.
-
-If the ``supabase`` package isn't installed, or the user skips signing in, the
-app still runs — it just falls back to the legacy local-network tabs, and the
-new cloud Sender panel shows "Sign in to send a project" via the same gate
-logic used everywhere else.
+Remote V3 is the primary workflow. Sender and Render Station communicate through
+Supabase; the old LAN tabs are retained only temporarily for migration/reference.
 """
 
 from __future__ import annotations
@@ -67,12 +56,6 @@ class LogPanel(QWidget):
 
 
 def _try_build_remote_client(config: AppConfig):
-    """Best-effort: build a Supabase-backed remote client, or None.
-
-    Never raises — a missing ``supabase`` package or an unreachable network
-    must not stop the app from opening; it just means the cloud tabs fall back
-    to their signed-out state.
-    """
     try:
         from ..remote.client import build_remote_client
         return build_remote_client()
@@ -112,8 +95,6 @@ class MainWindow(QMainWindow):
             tabs.addTab(self.sender_panel, "Local Network (Legacy)")
             tabs.addTab(self.station_panel, "Render Station (Legacy)")
         else:
-            # No cloud available this run: the legacy tabs are the only way
-            # to send or receive, so give them the primary names.
             tabs.addTab(self.sender_panel, "Send a project")
             tabs.addTab(self.station_panel, "Render station")
         tabs.addTab(self.history_panel, "Job history")
@@ -139,37 +120,21 @@ class MainWindow(QMainWindow):
         if config.first_run:
             QTimer.singleShot(200, self._show_first_run)
 
-    # -- cloud bootstrap ----------------------------------------------------
     def _bootstrap_cloud(self) -> None:
-        """One guided flow on first run (sign in + role + station setup);
-        just a plain sign-in prompt on every later launch if the restored
-        session didn't come back. If the cloud isn't available at all, this
-        does nothing — the old storage-only FirstRunDialog handles that case
-        from __init__'s caller instead."""
         if self.remote_client is None:
             return
-
         restored = self.remote_client.auth.restore()
         if self.config.first_run:
             from .setup_wizard import SetupWizard
             SetupWizard(self.remote_client, self.config, self).exec()
-            # SetupWizard sets first_run = False and saves the config itself,
-            # whether or not sign-in succeeded — a skipped sign-in just means
-            # the remote panels stay in their signed-out state.
             return
-
         if not restored:
-            dialog = LoginDialog(self.remote_client, self)
-            dialog.exec()
-            # If the user closed the dialog without signing in, remote_client
-            # simply stays signed-out; every remote panel already degrades
-            # gracefully via the send-gate / "sign in" hints.
+            LoginDialog(self.remote_client, self).exec()
 
     def _start_remote_station_if_signed_in(self) -> None:
         if self.remote_client is None or not self.remote_client.signed_in:
             return
         if not self.config.station_role_enabled:
-            logger.info("cloud render station disabled by role choice")
             return
         try:
             from ..remote.station_worker import RemoteStationWorker
@@ -182,25 +147,20 @@ class MainWindow(QMainWindow):
 
     def _on_remote_event(self, kind: str, data: dict) -> None:
         logger.debug("remote station event %s %s", kind, data)
-        # No action needed here: PendingJobsPanel polls
-        # remote_worker.pending_manual directly and shows Accept/Reject rows
-        # for anything waiting.
+        if hasattr(self, "pending_panel"):
+            self.pending_panel.refresh()
 
     def _update_status_bar(self) -> None:
         if self.remote_client is None:
-            self.statusBar().showMessage(
-                "Cloud features unavailable (the 'supabase' package isn't "
-                "installed). Using local-network mode only.")
+            self.statusBar().showMessage("Remote features unavailable; check the Supabase client configuration.")
         elif self.remote_client.signed_in:
-            station_bit = (f" · Render Station: {self.config.station_name} "
-                           f"({self.config.station_id})"
-                           if self.remote_worker else "")
+            station_bit = (
+                f" · Render Station: {self.config.station_name} (Online)"
+                if self.remote_worker else "")
             self.statusBar().showMessage(
                 f"Signed in as {self.remote_client.auth.username}{station_bit}")
         else:
-            self.statusBar().showMessage(
-                "Not signed in — open Settings or restart the app to sign in "
-                "and use the cloud Sender.")
+            self.statusBar().showMessage("Not signed in — sign in to use Remote V3.")
 
     def _show_first_run(self) -> None:
         dialog = FirstRunDialog(self.config, self)
@@ -208,9 +168,6 @@ class MainWindow(QMainWindow):
         self.settings_panel._load()
 
     def _bind_history(self) -> None:
-        # Point the "local" history tab at whichever job store is actually
-        # active: the cloud worker's if it's running, otherwise the legacy
-        # LAN station's if that's online, otherwise nothing.
         if self.remote_worker is not None:
             store = self.remote_worker.local_store
         elif self.station_panel.station is not None:
@@ -221,9 +178,6 @@ class MainWindow(QMainWindow):
             self.history_panel.bind_store(store)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # Stop the cloud worker first: this marks the station offline and
-        # stops its heartbeat/subscriptions before anything else tears down,
-        # so no hidden process is left believing it's still reachable.
         if self.remote_worker is not None:
             try:
                 self.remote_worker.stop()
