@@ -1,15 +1,11 @@
-"""Main window: one application, two roles — now cloud-connected.
-
-Remote V3 is the primary workflow. Sender and Render Station communicate through
-Supabase; the old LAN tabs are retained only temporarily for migration/reference.
-"""
-
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QTimer, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit,
                                QPushButton, QTabWidget, QVBoxLayout, QWidget)
 
@@ -27,6 +23,16 @@ from .station_panel import StationPanel
 from .theme import STYLESHEET
 
 logger = get_logger("ui.main_window")
+
+
+def _icon_path() -> Path:
+    """Resolve the bundled Windows icon in source and PyInstaller builds."""
+    if hasattr(sys, "_MEIPASS"):
+        base = Path(getattr(sys, "_MEIPASS"))
+    else:
+        # src/ui/main_window.py -> repository root
+        base = Path(__file__).resolve().parents[2]
+    return base / "assets" / "FileSender.ico"
 
 
 class LogPanel(QWidget):
@@ -50,27 +56,26 @@ class LogPanel(QWidget):
 
         layout.addWidget(self.view)
         layout.addLayout(buttons)
-
         self.line_signal.connect(self.view.appendPlainText)
         ring.subscribe(lambda line: self.line_signal.emit(line))
-
-
-def _try_build_remote_client(config: AppConfig):
-    try:
-        from ..remote.client import build_remote_client
-        return build_remote_client()
-    except Exception as exc:                                  # noqa: BLE001
-        logger.warning("cloud features unavailable: %s", exc)
-        return None
 
 
 class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.config = config
-        self.setWindowTitle(f"Premiere Render App {__version__}")
+        self.setWindowTitle(f"FileSender {__version__}")
         self.resize(1040, 860)
         self.setStyleSheet(STYLESHEET)
+
+        # Set the application/window icon so the title bar and Windows taskbar
+        # use the same FileSender branding as the executable/shortcuts.
+        icon = _icon_path()
+        if icon.exists():
+            app_icon = QIcon(str(icon))
+            self.setWindowIcon(app_icon)
+            if self.windowHandle() is not None:
+                self.windowHandle().setIcon(app_icon)
 
         self.remote_client = _try_build_remote_client(config)
         self.remote_worker = None
@@ -112,7 +117,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
         self._update_status_bar()
-
         self._bind_timer = QTimer(self)
         self._bind_timer.timeout.connect(self._bind_history)
         self._bind_timer.start(1500)
@@ -135,37 +139,41 @@ class MainWindow(QMainWindow):
         if self.remote_client is None or not self.remote_client.signed_in:
             return
         if not self.config.station_role_enabled:
+            logger.info("cloud render station disabled by role choice")
             return
         try:
             from ..remote.station_worker import RemoteStationWorker
             self.remote_worker = RemoteStationWorker(
                 self.remote_client, self.config, on_event=self._on_remote_event)
             self.remote_worker.start()
-        except Exception as exc:                              # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.error("could not start the cloud render station: %s", exc)
             self.remote_worker = None
 
     def _on_remote_event(self, kind: str, data: dict) -> None:
         logger.debug("remote station event %s %s", kind, data)
-        if hasattr(self, "pending_panel"):
-            self.pending_panel.refresh()
 
     def _update_status_bar(self) -> None:
         if self.remote_client is None:
-            self.statusBar().showMessage("Remote features unavailable; check the Supabase client configuration.")
+            self.statusBar().showMessage(
+                "Cloud features unavailable. Please check the installation.")
         elif self.remote_client.signed_in:
-            station_bit = (
-                f" · Render Station: {self.config.station_name} (Online)"
-                if self.remote_worker else "")
+            station_bit = (f" · Render Station: {self.config.station_name} "
+                           f"({self.config.station_id})"
+                           if self.remote_worker else "")
             self.statusBar().showMessage(
                 f"Signed in as {self.remote_client.auth.username}{station_bit}")
         else:
-            self.statusBar().showMessage("Not signed in — sign in to use Remote V3.")
+            self.statusBar().showMessage(
+                "Not signed in — sign in to use remote sending.")
 
     def _show_first_run(self) -> None:
-        dialog = FirstRunDialog(self.config, self)
-        dialog.exec()
-        self.settings_panel._load()
+        # SetupWizard handles the remote first-run configuration. Keep the
+        # legacy dialog only as a fallback for installs without cloud support.
+        if self.remote_client is None:
+            dialog = FirstRunDialog(self.config, self)
+            dialog.exec()
+            self.settings_panel._load()
 
     def _bind_history(self) -> None:
         if self.remote_worker is not None:
@@ -181,7 +189,7 @@ class MainWindow(QMainWindow):
         if self.remote_worker is not None:
             try:
                 self.remote_worker.stop()
-            except Exception:                                 # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 logger.exception("error stopping the cloud render station")
         self.sender_panel.shutdown()
         self.station_panel.shutdown()
@@ -189,3 +197,12 @@ class MainWindow(QMainWindow):
             self.remote_sender_panel.shutdown()
         save_config(self.config)
         super().closeEvent(event)
+
+
+def _try_build_remote_client(config: AppConfig):
+    try:
+        from ..remote.client import build_remote_client
+        return build_remote_client()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cloud features unavailable: %s", exc)
+        return None

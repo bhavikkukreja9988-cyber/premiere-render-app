@@ -6,17 +6,17 @@ It produces a one-folder build under ``build_app/PremiereRenderApp/`` whose
 main executable is ``PremiereRenderApp.exe``. The Inno Setup script in this
 folder then wraps that folder into the installer ``FileSender.exe``.
 
-The Media Encoder agent (.jsx) is bundled as data at ``src/render/jsx/`` so the
-installed app can copy it into Adobe's startup-scripts folder at runtime.
+The Media Encoder agent (.jsx) and the FileSender Windows icon are bundled as
+runtime data. The executable itself also receives the same icon so Windows uses
+it for the taskbar, Start Menu and installed application.
 """
 
 import os
 
-# When PyInstaller evaluates this spec, the working directory is the repo root
-# (the build scripts cd there first). SPECPATH points at this installer folder.
 project_root = os.path.abspath(os.getcwd())
 agent = os.path.join(project_root, "src", "render", "jsx",
                      "PremiereRenderAgent.jsx")
+icon = os.path.join(project_root, "assets", "FileSender.ico")
 
 block_cipher = None
 
@@ -24,11 +24,12 @@ a = Analysis(
     [os.path.join(project_root, "src", "main.py")],
     pathex=[project_root],
     binaries=[],
-    datas=[(agent, os.path.join("src", "render", "jsx"))],
+    datas=[
+        (agent, os.path.join("src", "render", "jsx")),
+        (icon, os.path.join("assets")),
+    ],
     hiddenimports=[
         "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
-        # Supabase client and its transitive HTTP stack. PyInstaller does not
-        # always discover these automatically.
         "supabase", "gotrue", "postgrest", "storage3", "realtime",
         "httpx", "httpcore", "h2", "websockets",
     ],
@@ -57,9 +58,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,          # windowed app, no console window
+    console=False,
     disable_windowed_traceback=False,
-    icon=None,
+    icon=icon,
 )
 
 coll = COLLECT(
