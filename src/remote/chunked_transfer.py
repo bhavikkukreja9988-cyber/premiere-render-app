@@ -36,10 +36,10 @@ from typing import Callable, Optional
 from ..core.manifest import hash_file
 from .transport import NotFoundError, RemoteTransport
 
-CHUNK_SIZE = 8 * 1024 * 1024          # 8 MiB per chunk
-CHUNK_THRESHOLD = 32 * 1024 * 1024    # only chunk files at/above this size
+CHUNK_SIZE = 8 * 1024 * 1024
+CHUNK_THRESHOLD = 32 * 1024 * 1024
 
-ProgressFn = Callable[[int, int], None]     # (bytes_done, bytes_total)
+ProgressFn = Callable[[int, int], None]
 CancelFn = Callable[[], bool]
 
 
@@ -56,9 +56,7 @@ def upload_file(transport: RemoteTransport, bucket: str, base_path: str,
                 chunk_size: int = CHUNK_SIZE, threshold: int = CHUNK_THRESHOLD,
                 on_progress: Optional[ProgressFn] = None,
                 cancel: Optional[CancelFn] = None) -> None:
-    """Upload ``local_path`` to ``base_path``, chunked above ``threshold``."""
     size = local_path.stat().st_size
-
     if size < threshold:
         transport.upload(bucket, base_path, local_path.read_bytes())
         if on_progress:
@@ -66,10 +64,7 @@ def upload_file(transport: RemoteTransport, bucket: str, base_path: str,
         return
 
     chunk_count = max(1, (size + chunk_size - 1) // chunk_size)
-    # Discover parts a previous, interrupted attempt already delivered so a
-    # retry never re-sends bytes that already made it to the server.
     existing = set(transport.list_objects(bucket, base_path + ".part"))
-
     done_bytes = 0
     with open(local_path, "rb") as handle:
         for index in range(chunk_count):
@@ -95,12 +90,6 @@ def download_file(transport: RemoteTransport, bucket: str, base_path: str,
                   dest_path: Path, expected_sha256: str = "",
                   on_progress: Optional[ProgressFn] = None,
                   cancel: Optional[CancelFn] = None) -> None:
-    """Download ``base_path`` to ``dest_path``, resuming a partial local file.
-
-    Verifies the whole file against ``expected_sha256`` if given, or — for a
-    chunked file — against the hash recorded in its manifest at upload time.
-    Raises ``ValueError`` and removes the (corrupt) local file on mismatch.
-    """
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest: Optional[dict] = None
     try:
@@ -118,16 +107,14 @@ def download_file(transport: RemoteTransport, bucket: str, base_path: str,
         size = int(manifest["size"])
         chunk_size = int(manifest["chunk_size"])
         chunk_count = int(manifest["chunks"])
-
         start_index = 0
         if dest_path.exists():
             current_size = dest_path.stat().st_size
             complete_chunks = current_size // chunk_size
-            if complete_chunks * chunk_size == current_size and \
-                    complete_chunks <= chunk_count:
+            if complete_chunks * chunk_size == current_size and complete_chunks <= chunk_count:
                 start_index = complete_chunks
             else:
-                dest_path.unlink()      # corrupt/misaligned leftover, restart
+                dest_path.unlink()
 
         mode = "r+b" if start_index else "wb"
         with open(dest_path, mode) as handle:
@@ -144,7 +131,6 @@ def download_file(transport: RemoteTransport, bucket: str, base_path: str,
                 done_bytes += len(chunk)
                 if on_progress:
                     on_progress(done_bytes, size)
-
         if not expected_sha256:
             expected_sha256 = str(manifest.get("sha256", ""))
 
