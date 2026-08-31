@@ -95,5 +95,57 @@ class TestProjectProbe(unittest.TestCase):
             self.assertEqual(info.sequences, [])
 
 
+class TestExternalMediaDetection(unittest.TestCase):
+    def test_flags_media_outside_the_project_folder(self):
+        from src.core.project_probe import find_external_media
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MyProject"
+            root.mkdir()
+            outside = Path(tmp) / "Elsewhere"
+            outside.mkdir()
+            inside_file = root / "footage" / "insidefile.mov"
+            inside_file.parent.mkdir()
+            inside_file.write_bytes(b"x")
+            outside_file = outside / "outsidefile.mov"
+            outside_file.write_bytes(b"x")
+
+            xml = (
+                b"<PremiereData><Media><ActualMediaFilePath>"
+                + f"file://{inside_file.as_posix()}".encode()
+                + b"</ActualMediaFilePath></Media><Media>"
+                + b"<ActualMediaFilePath>"
+                + f"file://{outside_file.as_posix()}".encode()
+                + b"</ActualMediaFilePath></Media></PremiereData>"
+            )
+            prproj = root / "Edit.prproj"
+            prproj.write_bytes(gzip.compress(xml))
+
+            hits = find_external_media(prproj, root)
+            self.assertTrue(any("outsidefile.mov" in h for h in hits))
+            self.assertFalse(any("insidefile.mov" in h for h in hits))
+
+    def test_no_external_media_returns_empty(self):
+        from src.core.project_probe import find_external_media
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "MyProject"
+            root.mkdir()
+            inside_file = root / "clip.mov"
+            inside_file.write_bytes(b"x")
+            xml = (b"<PremiereData><Media><ActualMediaFilePath>file://"
+                  + inside_file.as_posix().encode()
+                  + b"</ActualMediaFilePath></Media></PremiereData>")
+            prproj = root / "Edit.prproj"
+            prproj.write_bytes(gzip.compress(xml))
+            self.assertEqual(find_external_media(prproj, root), [])
+
+    def test_never_raises_on_garbage_input(self):
+        from src.core.project_probe import find_external_media
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prproj = root / "broken.prproj"
+            prproj.write_bytes(b"\x00\x01garbage not gzip or xml")
+            self.assertEqual(find_external_media(prproj, root), [])
+
+
 if __name__ == "__main__":
     unittest.main()

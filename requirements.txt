@@ -1,4 +1,5 @@
 PySide6>=6.6,<7
+supabase>=2.4
 watchdog>=3.0
 pyinstaller>=6.3
 pytest>=7.4

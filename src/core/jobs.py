@@ -34,11 +34,11 @@ class JobSpec:
 
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     name: str = "untitled"
-    project_relpath: str = ""
-    sequence: str = ""
-    preset_source: str = "station"
-    preset_ref: str = ""
-    output_name: str = ""
+    project_relpath: str = ""          # e.g. "MyEdit/MyEdit.prproj"
+    sequence: str = ""                 # empty -> station renders the first sequence
+    preset_source: str = "station"     # "station" | "attached" | "default"
+    preset_ref: str = ""               # preset name, or relpath of an attached .epr
+    output_name: str = ""              # without extension; defaults to the job name
     container: str = ".mp4"
     sender_name: str = ""
     file_count: int = 0
@@ -65,17 +65,18 @@ class JobSpec:
 class JobRecord:
     spec: JobSpec
     state: JobState = JobState.CREATED
-    progress: float = 0.0
+    progress: float = 0.0              # 0..1 for the current phase
     message: str = ""
     error: str = ""
     bytes_received: int = 0
     output_path: str = ""
     updated_at: float = field(default_factory=time.time)
     history: List[Dict[str, Any]] = field(default_factory=list)
-    seq: int = 0
-    label: str = ""
-    started_at: float = 0.0
-    completed_at: float = 0.0
+    # Station-assigned, human-friendly identity and lifecycle timestamps.
+    seq: int = 0                       # 0 until the station assigns a number
+    label: str = ""                    # e.g. "Job-001"; falls back to short id
+    started_at: float = 0.0            # when rendering began
+    completed_at: float = 0.0          # when the job reached a terminal state
 
     def to_dict(self) -> dict:
         return {
@@ -118,15 +119,23 @@ class JobRecord:
 
     @property
     def display_label(self) -> str:
+        """Human-friendly identity for the UI: 'Job-001', or a short id."""
         return self.label or f"Job-{self.job_id[:8]}"
 
 
 class JobStore:
-    """Thread-safe job table with crash-safe JSON persistence."""
+    """Thread-safe job table with crash-safe JSON persistence.
+
+    The station keeps its queue here so a restart mid-batch does not lose
+    jobs that have already been transferred.
+    """
 
     def __init__(self, path: Optional[Path] = None,
                  jobs_root: Optional[Path] = None) -> None:
         self._path = Path(path) if path else None
+        # Directory that holds per-job folders; used to mirror each job's
+        # state into <jobs_root>/<label>/state.json for easy inspection and
+        # per-job crash recovery. Defaults next to the jobs.json file.
         if jobs_root is not None:
             self._jobs_root: Optional[Path] = Path(jobs_root)
         elif self._path is not None:
@@ -140,6 +149,7 @@ class JobStore:
         if self._path and self._path.exists():
             self.load()
 
+    # -- listeners --------------------------------------------------------
     def subscribe(self, callback: Callable[[JobRecord], None]) -> None:
         with self._lock:
             self._listeners.append(callback)
@@ -148,11 +158,15 @@ class JobStore:
         for callback in list(self._listeners):
             try:
                 callback(record)
-            except Exception:
+            except Exception:  # a broken UI listener must never kill a render
                 pass
 
+    # -- access -----------------------------------------------------------
     def add(self, record: JobRecord) -> JobRecord:
         with self._lock:
+            # Assign a station-local, human-friendly identity the first time we
+            # see a job. Each send is a distinct job even if the content is
+            # identical, so the sequence just keeps counting up.
             if record.seq <= 0:
                 self._counter += 1
                 record.seq = self._counter
@@ -170,7 +184,8 @@ class JobStore:
 
     def list(self) -> List[JobRecord]:
         with self._lock:
-            return sorted(self._jobs.values(), key=lambda r: r.spec.created_at, reverse=True)
+            return sorted(self._jobs.values(),
+                          key=lambda r: r.spec.created_at, reverse=True)
 
     def remove(self, job_id: str) -> None:
         with self._lock:
@@ -215,7 +230,14 @@ class JobStore:
         self._notify(record)
         return record
 
+    # -- persistence ------------------------------------------------------
     def _write_state_json(self, record: JobRecord) -> None:
+        """Mirror one job's state to <jobs_root>/<label>/state.json.
+
+        This is the per-job inspectable record the spec asks for. It is a
+        best-effort mirror of the central jobs.json (the source of truth), so a
+        write failure here never breaks a render.
+        """
         if self._jobs_root is None or not record.label:
             return
         try:
@@ -233,8 +255,10 @@ class JobStore:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-            tmp.write_text(json.dumps([r.to_dict() for r in self._jobs.values()], indent=2),
-                           encoding="utf-8")
+            tmp.write_text(
+                json.dumps([r.to_dict() for r in self._jobs.values()], indent=2),
+                encoding="utf-8",
+            )
             tmp.replace(self._path)
         except OSError:
             pass
@@ -252,6 +276,8 @@ class JobStore:
                     record = JobRecord.from_dict(item)
                 except Exception:
                     continue
+                # A job that was mid-render when the app closed cannot be
+                # resumed inside Media Encoder, so re-queue it.
                 if record.state in (JobState.RENDERING, JobState.RETURNING):
                     record.state = JobState.QUEUED
                     record.message = "re-queued after restart"

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog,
 from ..core.config import AppConfig, save_config
 
 
+
 class FirstRunDialog(QDialog):
     """Collects the storage location and station name on first launch."""
 

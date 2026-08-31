@@ -2,7 +2,9 @@
 
 Runs one job end to end over Supabase instead of a direct socket: scan and hash
 the project, create the cloud job, upload, wait for the render station, download
-and verify the result, and confirm delivery.
+and verify the result, and confirm delivery. Each phase is a plain database/
+storage call, so a laptop that sleeps mid-render simply reconnects and keeps
+polling — there is no persistent connection to lose.
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ from .models import RemoteJob, RemoteJobState
 from .transport import OfflineError, RemoteError, friendly_message
 
 logger = get_logger("remote.sender_service")
+
 POLL_SECONDS = 4.0
-MAX_CONSECUTIVE_ERRORS = 60
+MAX_CONSECUTIVE_ERRORS = 60      # ~4 minutes of retrying a flaky connection
 
 
 @dataclass
@@ -88,6 +91,7 @@ class RemoteSendWorker(threading.Thread):
                 delete_after_delivery=req.delete_after_delivery)
             self.job_id = job.id
             self.on_state("created", {"job_id": job.id, "label": job.display_label})
+
             self.client.jobs.set_state(job.id, RemoteJobState.UPLOADING)
 
             def upload_progress(path: str, done: int, total: int) -> None:
@@ -109,6 +113,7 @@ class RemoteSendWorker(threading.Thread):
             final = self._wait_for_result(job.id)
             if final is None:
                 return
+
             self._report("download", 0.0, "fetching the rendered file")
             dest = self.client.storage.download_result(
                 job.id, final.output_filename, req.output_dir,
@@ -128,6 +133,7 @@ class RemoteSendWorker(threading.Thread):
             self._report("done", 1.0, f"saved {dest.name}")
             self.on_state("complete", {"job_id": job.id, "path": str(dest)})
             logger.info("remote job %s complete -> %s", job.id[:8], dest)
+
         except InterruptedError:
             self.error = "cancelled"
             self.on_state("cancelled", {"job_id": self.job_id})
@@ -142,7 +148,7 @@ class RemoteSendWorker(threading.Thread):
                     pass
             self.on_state("failed", {"job_id": self.job_id, "error": message})
             logger.error("remote job %s failed: %s", self.job_id[:8] or "?", exc)
-        except Exception as exc:
+        except Exception as exc:                              # noqa: BLE001
             message = friendly_message(exc)
             self.error = message
             self.on_state("failed", {"job_id": self.job_id, "error": message})
@@ -162,6 +168,7 @@ class RemoteSendWorker(threading.Thread):
                         f"Lost contact with the server: {friendly_message(exc)}")
                 time.sleep(POLL_SECONDS)
                 continue
+
             if job is None:
                 raise RuntimeError("the job disappeared")
             if job.state is RemoteJobState.READY_FOR_DOWNLOAD:
@@ -170,9 +177,11 @@ class RemoteSendWorker(threading.Thread):
                 raise RuntimeError(job.error or "render failed")
             if job.state is RemoteJobState.CANCELLED:
                 raise InterruptedError("cancelled")
+
             label = {
                 RemoteJobState.UPLOADED: "waiting for the render station",
-                RemoteJobState.WAITING_FOR_STATION: "waiting for the station operator to accept",
+                RemoteJobState.WAITING_FOR_STATION: "waiting for the station "
+                                                    "operator to accept",
                 RemoteJobState.DOWNLOADING: "render station is downloading",
                 RemoteJobState.QUEUED: "queued for rendering",
                 RemoteJobState.RENDERING: "rendering",

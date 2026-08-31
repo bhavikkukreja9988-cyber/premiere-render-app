@@ -102,6 +102,31 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(records[0].state, JobState.COMPLETE)
         self.assertEqual(records[0].spec.sequence, "Main Timeline")
 
+    def test_same_project_sent_three_times_makes_three_isolated_jobs(self):
+        # The spec's headline requirement: sending the identical project folder
+        # repeatedly must create separate render jobs, never a rejected
+        # "duplicate", and each job's data must be isolated from the others.
+        from src.core.jobs import JobSpec
+
+        for _ in range(3):
+            spec = JobSpec(name="promo", project_relpath="Edit.prproj",
+                           sequence="Main Timeline", output_name="promo_final")
+            worker = self._run_worker(self._request(spec=spec))
+            self.assertEqual(worker.error, "")
+
+        records = self.station.store.list()
+        self.assertEqual(len(records), 3, "each send must be its own job")
+        self.assertEqual(len({r.job_id for r in records}), 3, "unique job ids")
+        self.assertEqual(sorted(r.label for r in records),
+                         ["Job-001", "Job-002", "Job-003"])
+        # Every job kept its own isolated project folder on the station.
+        jobs_root = Path(self.config.workspace_dir) / "jobs"
+        for record in records:
+            project = jobs_root / record.job_id / "project" / "Edit.prproj"
+            self.assertTrue(project.is_file(),
+                            f"{record.label} lost its isolated project data")
+        self.assertTrue(all(r.state is JobState.COMPLETE for r in records))
+
     def test_transferred_folder_matches_the_original(self):
         self._run_worker(self._request())
         job_id = self.station.store.list()[0].job_id

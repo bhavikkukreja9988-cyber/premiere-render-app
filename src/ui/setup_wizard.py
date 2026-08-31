@@ -1,7 +1,13 @@
 """First-run setup wizard.
 
-One guided first-run flow: sign in, choose Sender / Render Station / Both,
-and, for Render Station, configure name, storage, auto-accept and retention.
+One guided flow instead of two separate dialogs: sign in, choose whether this
+PC sends projects, receives them, or both, and — if it receives them —
+configure the render station basics. Matches plan sections 54/55. Shown once;
+everything here can be changed later in Settings.
+
+If no remote client is available (the ``supabase`` package isn't installed),
+this wizard is skipped entirely and the old storage-only ``FirstRunDialog`` is
+used instead — signing in and choosing a role make no sense without the cloud.
 """
 
 from __future__ import annotations
@@ -24,23 +30,28 @@ class _WelcomePage(QWidget):
         self.client = client
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
+
         heading = QLabel("Welcome to Premiere Render App")
         heading.setObjectName("heading")
         layout.addWidget(heading)
+
         hint = QLabel(
-            "Everyone in the family signs in with the same username and password. "
-            "Signing in with a new username creates it automatically — there is no separate sign-up step.")
+            "Everyone in the family signs in with the same username and "
+            "password. Signing in with a new username creates it "
+            "automatically — there's no separate sign-up step.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+
         form = QFormLayout()
         self.username_edit = QLineEdit()
-        self.username_edit.setPlaceholderText("e.g. family")
+        self.username_edit.setPlaceholderText("e.g. bhavikfamily")
         form.addRow("Username", self.username_edit)
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.Password)
         form.addRow("Password", self.password_edit)
         layout.addLayout(form)
+
         self.error_label = QLabel("")
         self.error_label.setStyleSheet(f"color: {BAD};")
         self.error_label.setWordWrap(True)
@@ -68,17 +79,23 @@ class _RolePage(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
+
         heading = QLabel("How will this PC be used?")
         heading.setObjectName("heading")
         layout.addWidget(heading)
+
         hint = QLabel("Pick at least one. You can change this later in Settings.")
         hint.setObjectName("hint")
         layout.addWidget(hint)
-        self.sender_check = QCheckBox("Sender — send Premiere projects from this PC")
+
+        self.sender_check = QCheckBox(
+            "Sender — pick a Premiere project on this PC and send it out")
         self.sender_check.setChecked(True)
-        self.station_check = QCheckBox("Render Station — receive projects and render them here")
+        self.station_check = QCheckBox(
+            "Render Station — receive projects and render them here")
         layout.addWidget(self.sender_check)
         layout.addWidget(self.station_check)
+
         self.error_label = QLabel("")
         self.error_label.setStyleSheet(f"color: {BAD};")
         layout.addWidget(self.error_label)
@@ -97,12 +114,15 @@ class _StationPage(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
+
         heading = QLabel("Render Station setup")
         heading.setObjectName("heading")
         layout.addWidget(heading)
+
         form = QFormLayout()
         self.name_edit = QLineEdit(config.station_name)
         form.addRow("Station name", self.name_edit)
+
         storage_row = QHBoxLayout()
         self.storage_edit = QLineEdit(config.workspace_dir)
         browse = QPushButton("Browse…")
@@ -110,25 +130,33 @@ class _StationPage(QWidget):
         storage_row.addWidget(self.storage_edit, 4)
         storage_row.addWidget(browse, 1)
         form.addRow("Store received projects in", storage_row)
+
         self.accept_check = QCheckBox("Accept incoming jobs automatically")
-        self.accept_check.setChecked(getattr(config, "accept_jobs_automatically", False))
+        self.accept_check.setChecked(config.accept_jobs_automatically)
         form.addRow("New jobs", self.accept_check)
+
         self.retention_combo = QComboBox()
         for label, days in AppConfig.RETENTION_CHOICES:
             self.retention_combo.addItem(label, days)
         current = next((i for i in range(self.retention_combo.count())
-                        if self.retention_combo.itemData(i) == config.retention_days), 0)
+                        if self.retention_combo.itemData(i) == config.retention_days),
+                       0)
         self.retention_combo.setCurrentIndex(current)
         form.addRow("Delete completed projects after", self.retention_combo)
         layout.addLayout(form)
-        note = QLabel("Media Encoder will be detected automatically. If it isn't found, you can set its location later in Settings.")
+
+        note = QLabel(
+            "Media Encoder will be detected automatically. If it isn't found, "
+            "you can set its location later in Settings.")
         note.setObjectName("hint")
         note.setWordWrap(True)
         layout.addWidget(note)
         layout.addStretch(1)
 
     def _pick_storage(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Where should received Premiere projects be stored?", self.storage_edit.text() or str(Path.home()))
+        folder = QFileDialog.getExistingDirectory(
+            self, "Where should received Premiere projects be stored?",
+            self.storage_edit.text() or str(Path.home()))
         if folder:
             self.storage_edit.setText(folder)
 
@@ -142,22 +170,30 @@ class _StationPage(QWidget):
 
 
 class SetupWizard(QDialog):
-    def __init__(self, client: RemoteClient, config: AppConfig, parent: QWidget | None = None) -> None:
+    """Sign in, choose a role, and (if applicable) configure the station —
+    all in one flow, shown once."""
+
+    def __init__(self, client: RemoteClient, config: AppConfig,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.client = client
         self.config = config
         self.setWindowTitle("Set up Premiere Render App")
         self.setMinimumWidth(480)
         self.setModal(True)
+
         self.welcome_page = _WelcomePage(client)
         self.role_page = _RolePage()
         self.station_page = _StationPage(config)
+
         self.stack = QStackedWidget()
         self.stack.addWidget(self.welcome_page)
         self.stack.addWidget(self.role_page)
         self.stack.addWidget(self.station_page)
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.stack)
+
         button_row = QHBoxLayout()
         self.back_button = QPushButton("Back")
         self.back_button.clicked.connect(self._go_back)
@@ -168,6 +204,9 @@ class SetupWizard(QDialog):
         button_row.addStretch(1)
         button_row.addWidget(self.next_button)
         layout.addLayout(button_row)
+
+        # If already signed in (a restored session), skip straight to role
+        # choice — there's nothing to ask on the welcome page.
         if client.signed_in:
             self.stack.setCurrentWidget(self.role_page)
         self._update_buttons()
@@ -176,10 +215,12 @@ class SetupWizard(QDialog):
         return self.stack.currentIndex()
 
     def _update_buttons(self) -> None:
-        self.back_button.setEnabled(self._current_index() > (1 if self.client.signed_in else 0))
+        self.back_button.setEnabled(
+            self._current_index() > (1 if self.client.signed_in else 0))
         on_station_page = self.stack.currentWidget() is self.station_page
         wants_station = self.role_page.station_check.isChecked()
-        is_last_page = on_station_page or (self.stack.currentWidget() is self.role_page and not wants_station)
+        is_last_page = on_station_page or (
+            self.stack.currentWidget() is self.role_page and not wants_station)
         self.next_button.setText("Finish" if is_last_page else "Next")
 
     def _go_back(self) -> None:

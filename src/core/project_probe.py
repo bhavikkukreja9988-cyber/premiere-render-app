@@ -110,3 +110,75 @@ def probe_project(path: Path) -> ProjectInfo:
     except Exception as exc:                      # noqa: BLE001 - never fatal
         names = _fallback_regex_scan(path)
         return ProjectInfo(str(path), names, readable=bool(names), error=str(exc))
+
+
+# -- external media detection (best effort) ---------------------------------
+# Premiere stores absolute media paths as file:// URLs and, on Windows, plain
+# drive-letter paths, inside opaque binary/XML blobs whose exact schema varies
+# by version. This is a heuristic, not a full parser: it looks for path-shaped
+# strings and flags ones that clearly point outside the project folder. It can
+# miss things and can also over-flag; it exists to warn, not to block silently.
+_WIN_PATH_RE = re.compile(r'[A-Za-z]:[\\/][^"<>\x00-\x1f]{3,400}')
+_FILE_URL_RE = re.compile(r'file://(?:localhost)?/[^"\s<>\x00-\x1f]{3,400}')
+_MAX_EXTERNAL_HITS = 25
+
+
+def _file_url_to_path(url: str) -> str:
+    from urllib.parse import unquote, urlsplit
+    parsed = urlsplit(url)
+    raw = unquote(parsed.path)
+    # A Windows path shows up as file:///C:/... -> path is "/C:/...".
+    if re.match(r"^/[A-Za-z]:", raw):
+        raw = raw[1:]
+    return raw
+
+
+def find_external_media(prproj_path: Path, project_root: Path) -> List[str]:
+    """Return likely-external absolute media paths referenced by the project.
+
+    Best-effort and capped; never raises. An empty list means either nothing
+    was found or the project could not be scanned — callers should treat that
+    as "no warning", not as a guarantee everything is included.
+    """
+    try:
+        stream = _open_project(Path(prproj_path))
+        with stream:
+            blob = stream.read(MAX_XML_BYTES)
+        text = blob.decode("utf-8", errors="ignore")
+    except OSError:
+        return []
+
+    root = Path(project_root).resolve()
+    found: List[str] = []
+    seen = set()
+
+    candidates: List[str] = []
+    for match in _FILE_URL_RE.finditer(text):
+        candidates.append(_file_url_to_path(match.group(0)))
+    for match in _WIN_PATH_RE.finditer(text):
+        candidates.append(match.group(0))
+
+    for raw in candidates:
+        if len(found) >= _MAX_EXTERNAL_HITS:
+            break
+        cleaned = raw.replace("\\", "/").rstrip("\x00")
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        try:
+            candidate_path = Path(cleaned)
+            if not candidate_path.is_absolute():
+                continue
+            resolved = candidate_path.resolve()
+        except (OSError, ValueError):
+            continue
+        if root in resolved.parents or resolved == root:
+            continue
+        # Skip Premiere's own program/plugin paths, not the user's media.
+        lowered = str(resolved).lower()
+        if any(marker in lowered for marker in
+               ("adobe premiere pro", "adobe media encoder", "common files",
+                "\\windows\\", "/windows/")):
+            continue
+        found.append(str(resolved))
+    return found

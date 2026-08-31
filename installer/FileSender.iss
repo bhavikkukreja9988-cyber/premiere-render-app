@@ -19,9 +19,12 @@
 #define AppPublisher "Premiere Render App"
 #define AppVersion "2.0.0"
 #define AppExeName "PremiereRenderApp.exe"
+; Source folder produced by PyInstaller (relative to this .iss file).
 #define BuildDir "..\build_app\PremiereRenderApp"
 
 [Setup]
+; A stable GUID keeps upgrades and uninstall registration consistent. Do not
+; change it between versions of this same app.
 AppId={{7B1D3F62-2A44-4E8C-9D2E-2F7A1C9B4E10}
 AppName={#AppName}
 AppVersion={#AppVersion}
@@ -29,6 +32,7 @@ AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\PremiereRenderApp
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
+; The finished installer file:
 OutputDir=..\dist_installer
 OutputBaseFilename=FileSender
 Compression=lzma2
@@ -36,6 +40,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
+; Installing into Program Files needs elevation; this asks for it once.
 PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}
@@ -44,18 +49,25 @@ UninstallDisplayName={#AppName}
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; \
+    GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Recursively include the entire PyInstaller one-folder build.
+Source: "{#BuildDir}\*"; DestDir: "{app}"; \
+    Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; \
+    Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+; Offer to launch the app when the wizard finishes.
+Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; \
+    Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
+; Remove leftover runtime files the app may have written next to itself.
 Type: filesandordirs; Name: "{app}\logs"

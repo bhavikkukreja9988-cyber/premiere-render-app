@@ -12,6 +12,8 @@ installed app can copy it into Adobe's startup-scripts folder at runtime.
 
 import os
 
+# When PyInstaller evaluates this spec, the working directory is the repo root
+# (the build scripts cd there first). SPECPATH points at this installer folder.
 project_root = os.path.abspath(os.getcwd())
 agent = os.path.join(project_root, "src", "render", "jsx",
                      "PremiereRenderAgent.jsx")
@@ -25,6 +27,10 @@ a = Analysis(
     datas=[(agent, os.path.join("src", "render", "jsx"))],
     hiddenimports=[
         "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
+        # Supabase client and its transitive HTTP stack. PyInstaller does not
+        # always discover these automatically.
+        "supabase", "gotrue", "postgrest", "storage3", "realtime",
+        "httpx", "httpcore", "h2", "websockets",
     ],
     hookspath=[],
     runtime_hooks=[],
@@ -51,7 +57,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,
+    console=False,          # windowed app, no console window
     disable_windowed_traceback=False,
     icon=None,
 )

@@ -90,7 +90,7 @@ check automatically anyway.
 
 ## Installing the app from FileSender.exe
 
-1. Run **`FileSender.exe`**.
+1. Run **FileSender.exe**.
 2. Click through: **Welcome → choose location → Install → Finish**.
    The default location is fine.
 3. The app is now installed like any normal program, with a Start Menu entry

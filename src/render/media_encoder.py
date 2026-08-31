@@ -182,12 +182,33 @@ def startup_scripts_dir() -> Path:
 
 
 def bundled_agent_source() -> Path:
-    """Where the agent .jsx lives, both from source and inside a frozen build."""
+    """Where the agent .jsx lives, from source and inside a frozen build.
+
+    Works for both PyInstaller layouts: onefile (extracted to ``sys._MEIPASS``)
+    and onedir (resources sit next to the executable). Several candidate paths
+    are tried so the installed app finds the agent regardless of install dir.
+    """
+    candidates = []
     if getattr(sys, "frozen", False):
-        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-        candidate = base / "src" / "render" / "jsx" / AGENT_FILENAME
-        if candidate.is_file():
-            return candidate
+        roots = [
+            Path(getattr(sys, "_MEIPASS", "")),
+            Path(sys.executable).resolve().parent,
+        ]
+        for root in roots:
+            if not str(root):
+                continue
+            candidates.append(root / "src" / "render" / "jsx" / AGENT_FILENAME)
+            candidates.append(root / "render" / "jsx" / AGENT_FILENAME)
+            candidates.append(root / AGENT_FILENAME)
+    candidates.append(Path(__file__).resolve().parent / "jsx" / AGENT_FILENAME)
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    # Last resort: return the source-tree path even if missing, so callers get a
+    # clear "file not found" pointing at the expected location.
     return Path(__file__).resolve().parent / "jsx" / AGENT_FILENAME
 
 

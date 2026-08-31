@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ..core import workspace
 from ..core.config import AppConfig
 from ..core.jobs import JobRecord, JobSpec, JobState, JobStore
+from ..core.retention import RetentionManager
 from ..core.log import get_logger
 from ..core.manifest import (FileEntry, UnsafePathError, diff_manifest, hash_file,
                              safe_join, verify_received)
@@ -384,10 +385,21 @@ class RenderStation:
         self.config = config
         self.on_event = on_event or (lambda kind, data: None)
         workspace.ensure_workspace(config.workspace)
-        self.store = JobStore(workspace.jobs_file(config.workspace))
+        self.store = JobStore(
+            workspace.jobs_file(config.workspace),
+            jobs_root=config.workspace / "jobs",
+        )
         self.backend = backend or build_backend(config)
         self.manager = RenderManager(self.store, self.backend, config, self.emit)
         self.beacon = StationBeacon(self.describe, config.discovery_port)
+        self.retention = RetentionManager(
+            self.store, config.workspace,
+            retention_days_provider=lambda: self.config.retention_days,
+            remove_job_dir=lambda job_id: workspace.remove_job_dir(
+                self.config.workspace, job_id),
+            busy_job_provider=lambda: self.manager.current_job,
+            on_event=self.emit,
+        )
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -412,6 +424,7 @@ class RenderStation:
                                         daemon=True)
         self._thread.start()
         self.manager.start()
+        self.retention.start()
         if self.config.broadcast_presence:
             self.beacon.start()
         logger.info("render station listening on %s:%s (workspace %s)",
@@ -422,6 +435,7 @@ class RenderStation:
     def stop(self) -> None:
         self._stop.set()
         self.beacon.stop()
+        self.retention.stop()
         self.manager.stop()
         if self._server:
             try:

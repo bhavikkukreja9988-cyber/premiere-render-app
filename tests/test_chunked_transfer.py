@@ -57,7 +57,7 @@ class TestSmallFiles(unittest.TestCase):
             ct.upload_file(transport, BUCKET, "job1/clip.mov", source,
                            threshold=1024 * 1024)
             objects = transport.list_objects(BUCKET, "job1/")
-            self.assertEqual(objects, ["job1/clip.mov"])
+            self.assertEqual(objects, ["job1/clip.mov"])   # no .part*, no manifest
 
             dest = Path(tmp) / "out" / "clip.mov"
             ct.download_file(transport, BUCKET, "job1/clip.mov", dest)
@@ -67,7 +67,9 @@ class TestSmallFiles(unittest.TestCase):
 class TestChunkedRoundTrip(unittest.TestCase):
     def _make_large_source(self, tmp: Path, size: int) -> Path:
         source = tmp / "big.mov"
-        source.write_bytes(os.urandom(size))
+        # Distinct byte pattern per 4-byte word so any reordering/corruption
+        # would be caught by the final byte-exact comparison.
+        source.write_bytes((os.urandom(size)))
         return source
 
     def test_large_file_chunks_and_reassembles_byte_exact(self):
@@ -79,6 +81,7 @@ class TestChunkedRoundTrip(unittest.TestCase):
                            chunk_size=8_000, threshold=1_000)
 
             objects = transport.list_objects(BUCKET, "job1/big.mov")
+            # 50000 / 8000 = 7 chunks (ceil), plus one manifest object.
             self.assertEqual(len(objects), 8)
             self.assertTrue(any(o.endswith(".manifest.json") for o in objects))
 
@@ -98,7 +101,7 @@ class TestChunkedRoundTrip(unittest.TestCase):
             self.assertTrue(seen)
             self.assertEqual(seen[-1], (30_000, 30_000))
             self.assertEqual([p[1] for p in seen], [30_000] * len(seen))
-            self.assertEqual(seen, sorted(seen))
+            self.assertEqual(seen, sorted(seen))   # done never goes backwards
 
 
 class TestUploadResume(unittest.TestCase):
@@ -110,6 +113,8 @@ class TestUploadResume(unittest.TestCase):
             source = root / "big.mov"
             source.write_bytes(os.urandom(24_000))
 
+            # Simulate a previous attempt that got the first two parts up
+            # before being interrupted.
             with open(source, "rb") as handle:
                 inner.upload(BUCKET, "job1/big.mov.part000000", handle.read(8_000))
                 inner.upload(BUCKET, "job1/big.mov.part000001", handle.read(8_000))
@@ -121,6 +126,9 @@ class TestUploadResume(unittest.TestCase):
             self.assertNotIn("job1/big.mov.part000001", counting.upload_calls)
             self.assertEqual(counting.upload_calls.get("job1/big.mov.part000002"), 1)
 
+            # The reassembled file must still be byte-identical, proving the
+            # pre-seeded parts really were the right bytes and got reused
+            # correctly rather than silently corrupting the result.
             dest = root / "out.mov"
             ct.download_file(inner, BUCKET, "job1/big.mov", dest)
             self.assertEqual(dest.read_bytes(), source.read_bytes())
@@ -136,6 +144,8 @@ class TestDownloadResume(unittest.TestCase):
             ct.upload_file(transport, BUCKET, "job1/big.mov", source,
                            chunk_size=8_000, threshold=1_000)
 
+            # Simulate a partial local download: the first chunk made it,
+            # then the connection dropped.
             dest = root / "big.mov"
             dest.write_bytes(source.read_bytes()[:8_000])
 
@@ -156,7 +166,7 @@ class TestDownloadResume(unittest.TestCase):
                            chunk_size=8_000, threshold=1_000)
 
             dest = root / "big.mov"
-            dest.write_bytes(b"x" * 3_333)
+            dest.write_bytes(b"x" * 3_333)      # not a whole number of chunks
 
             ct.download_file(transport, BUCKET, "job1/big.mov", dest)
             self.assertEqual(dest.read_bytes(), source.read_bytes())
@@ -193,6 +203,7 @@ class TestIntegrityAndCancellation(unittest.TestCase):
                 ct.upload_file(transport, BUCKET, "job1/big.mov", source,
                                chunk_size=8_000, threshold=1_000,
                                cancel=cancel_after_two)
+            # No manifest means the upload never reached "complete".
             self.assertFalse(any(o.endswith(".manifest.json") for o in
                                  transport.list_objects(BUCKET, "job1/")))
 

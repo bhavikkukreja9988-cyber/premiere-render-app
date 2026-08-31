@@ -2,7 +2,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from src.core.manifest import (DEFAULT_IGNORE, FileEntry, UnsafePathError,
+from src.core.manifest import (DEFAULT_IGNORE, UnsafePathError,
                                diff_manifest, hash_file, safe_join, scan_folder,
                                validate_relpath, verify_received)
 

@@ -11,6 +11,7 @@ from src.core.retention import RetentionManager, eligible_for_deletion
 
 class TestJobIdentity(unittest.TestCase):
     def test_each_spec_gets_a_unique_id(self):
+        # Sending the same project repeatedly must yield distinct job ids.
         ids = {JobSpec(name="MyVideo").job_id for _ in range(50)}
         self.assertEqual(len(ids), 50)
 
@@ -19,7 +20,8 @@ class TestJobIdentity(unittest.TestCase):
         a = store.add(JobRecord(spec=JobSpec(name="MyVideo")))
         b = store.add(JobRecord(spec=JobSpec(name="MyVideo")))
         c = store.add(JobRecord(spec=JobSpec(name="MyVideo")))
-        self.assertEqual([a.label, b.label, c.label], ["Job-001", "Job-002", "Job-003"])
+        self.assertEqual([a.label, b.label, c.label],
+                         ["Job-001", "Job-002", "Job-003"])
         self.assertEqual(len({a.job_id, b.job_id, c.job_id}), 3)
 
     def test_counter_survives_restart(self):
@@ -66,18 +68,23 @@ class TestRetention(unittest.TestCase):
 
     def test_currently_rendering_job_is_protected(self):
         record = self._record(JobState.COMPLETE, job_id="busy")
-        self.assertFalse(eligible_for_deletion(record, 7, protected_job_id="busy"))
+        self.assertFalse(
+            eligible_for_deletion(record, 7, protected_job_id="busy"))
 
     def test_sweep_removes_only_eligible_jobs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store = JobStore(root / "jobs.json", jobs_root=root / "jobs")
-            old = store.add(JobRecord(spec=JobSpec(name="old"), state=JobState.COMPLETE))
+            old = store.add(JobRecord(spec=JobSpec(name="old"),
+                                      state=JobState.COMPLETE))
             old.completed_at = time.time() - 30 * 86400
-            failed = store.add(JobRecord(spec=JobSpec(name="failed"), state=JobState.FAILED))
+            failed = store.add(JobRecord(spec=JobSpec(name="failed"),
+                                         state=JobState.FAILED))
             removed_dirs = []
-            manager = RetentionManager(store, root, lambda: 7,
-                lambda job_id: removed_dirs.append(job_id), lambda: None)
+            manager = RetentionManager(
+                store, root, lambda: 7,
+                lambda job_id: removed_dirs.append(job_id),
+                lambda: None)
             removed = manager.sweep()
             self.assertEqual(removed, [old.display_label])
             self.assertIsNone(store.get(old.job_id))
