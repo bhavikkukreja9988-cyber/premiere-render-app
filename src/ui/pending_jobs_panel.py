@@ -1,10 +1,6 @@
 """Manual job-acceptance banner.
 
-When "Accept incoming jobs automatically" is off, a job that reaches the
-station sits in ``RemoteStationWorker.pending_manual`` until the operator acts
-on it. This widget shows those jobs as a small banner above the tabs — plan
-section 26's "New render job available [Accept] [Reject]" — and stays hidden
-whenever there is nothing waiting.
+When automatic acceptance is off, pending jobs remain visible until accepted or rejected.
 """
 
 from __future__ import annotations
@@ -25,7 +21,6 @@ class PendingJobsPanel(QWidget):
         self._rows: Dict[str, QWidget] = {}
         self._build()
         self.setVisible(False)
-
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1500)
@@ -42,11 +37,9 @@ class PendingJobsPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 10, 12, 10)
         outer.setSpacing(6)
-
         heading = QLabel("New render job — waiting for your approval")
         heading.setStyleSheet(f"color: {WARN}; font-weight: 600;")
         outer.addWidget(heading)
-
         self.rows_layout = QVBoxLayout()
         self.rows_layout.setSpacing(4)
         outer.addLayout(self.rows_layout)
@@ -55,39 +48,32 @@ class PendingJobsPanel(QWidget):
         if self.remote_worker is None:
             self.setVisible(False)
             return
-
         pending = dict(self.remote_worker.pending_manual)
-
         for job_id in list(self._rows):
             if job_id not in pending:
                 row = self._rows.pop(job_id)
                 self.rows_layout.removeWidget(row)
                 row.deleteLater()
-
         for job_id, job in pending.items():
             if job_id in self._rows:
                 continue
             self._rows[job_id] = self._make_row(job_id, job)
             self.rows_layout.addWidget(self._rows[job_id])
-
         self.setVisible(bool(pending))
 
     def _make_row(self, job_id: str, job) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-
         project = getattr(job, "project_name", "") or "untitled"
         label_text = getattr(job, "display_label", job_id[:8])
-        label = QLabel(f"{label_text} — {project}")
-        layout.addWidget(label, 1)
-
+        layout.addWidget(QLabel(f"{label_text} — {project}"), 1)
         accept_button = QPushButton("Accept")
         accept_button.setObjectName("primary")
-        accept_button.clicked.connect(lambda: self._respond(job_id, accept=True))
+        accept_button.clicked.connect(lambda: self._respond(job_id, True))
         reject_button = QPushButton("Reject")
         reject_button.setObjectName("danger")
-        reject_button.clicked.connect(lambda: self._respond(job_id, accept=False))
+        reject_button.clicked.connect(lambda: self._respond(job_id, False))
         layout.addWidget(accept_button)
         layout.addWidget(reject_button)
         return row
@@ -95,8 +81,7 @@ class PendingJobsPanel(QWidget):
     def _respond(self, job_id: str, accept: bool) -> None:
         if self.remote_worker is None:
             return
-        target = (self.remote_worker.accept_pending if accept
-                  else self.remote_worker.reject_pending)
+        target = self.remote_worker.accept_pending if accept else self.remote_worker.reject_pending
         threading.Thread(target=target, args=(job_id,), daemon=True,
                          name="pending-job-response").start()
         self.remote_worker.pending_manual.pop(job_id, None)
