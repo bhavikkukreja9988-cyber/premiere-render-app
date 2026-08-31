@@ -1,138 +1,208 @@
-# Premiere Render App
+# Premiere Render App — Remote V3
 
-A small Windows app for sending an Adobe Premiere Pro project to another PC on
-your home network, rendering it there in Adobe Media Encoder, and getting the
-finished MP4 back automatically.
+FileSender is a Windows application for sending Adobe Premiere Pro projects to a remote Render Station, rendering them with Adobe Media Encoder, and returning the finished MP4.
 
-Built for family use: Person A picks a project folder and sends it; the render
-PC receives it, renders it quietly in the background, and returns the MP4 —
-without interrupting whoever is using the render PC.
+The Sender and Render Station can be in completely different locations and on different networks. Supabase provides the cloud coordination, authentication, realtime status, and temporary file storage.
 
-One app, two roles. The PC that edits runs it as a **Sender**. The PC that
-renders runs it as a **Render Station**. There is no server, no accounts, no
-payments, and nothing runs once the app is closed.
+## User experience
 
-## How it works
+### Sender
 
+1. Sign in with username + password.
+2. Select the Render Station shown by name.
+3. The station must be **Online** before Send is enabled.
+4. Drag a `.prproj` file or Premiere project folder into the drop area.
+5. Click **Send**.
+6. The project transfers to the station, renders, and the MP4 returns automatically.
+
+No IP address, port, pairing code, ZIP creation, or port forwarding is required.
+
+The same Premiere project may be sent repeatedly. Every send is a separate job.
+
+### Render Station
+
+1. Open FileSender.
+2. Sign in with username + password.
+3. Choose/confirm the Render Station role and station name.
+4. Configure the local project storage location and retention period.
+5. Optionally enable **Accept incoming jobs automatically**.
+
+While FileSender is open, the station is online and sends a heartbeat to Supabase. When FileSender is closed, it stops its heartbeat and goes offline. There is no hidden background FileSender service.
+
+The station's local IP may be displayed as informational/debug information only. It is not the remote connection mechanism.
+
+## Architecture
+
+```text
+Sender PC
+   |
+   | HTTPS / Supabase
+   v
+Supabase
+   |\
+   | \-- Auth / Stations / Jobs / Realtime
+   |
+   \---- Private Storage
+             |
+             v
+      Render Station PC
+             |
+             v
+   Premiere Pro / Media Encoder
+             |
+             v
+        Rendered MP4
+             |
+             v
+        Supabase Storage
+             |
+             v
+          Sender PC
 ```
-Person A (Sender PC)                 Render Station PC
---------------------                 -----------------
-pick project folder
-        |
-        |  send over the LAN  ------->  receive + verify
-                                              |
-                                        Media Encoder renders
-                                        (background, minimised)
-                                              |
-   save the MP4  <-------  return + verify  <--+
+
+The Render Station performs the actual Adobe rendering locally. Supabase is the remote control/storage layer, not the render engine.
+
+## Authentication
+
+The normal UI uses only:
+
+- Username
+- Password
+- Log In
+
+There is no email field, magic link, OTP, or pairing code.
+
+The current implementation maps the username to a synthetic Supabase Auth email internally so Supabase email/password authentication can still be used without exposing email to the user.
+
+Sessions are persisted locally so users normally remain signed in between application launches.
+
+Never commit Supabase secret/service-role keys or database passwords.
+
+## Supabase project
+
+Project name: `File Sender`
+
+Project URL:
+`https://dyvhlaljbgpyywrofrbg.supabase.co`
+
+The client uses the Supabase publishable key. Privileged secrets stay server-side and are never embedded in FileSender.exe.
+
+See [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md).
+
+## Transfer and jobs
+
+Projects are uploaded to private, job-specific cloud storage using resumable/chunked transfer for large files.
+
+A Project and a Job are different concepts:
+
+```text
+MyVideo -> Job-001
+MyVideo -> Job-002
+MyVideo -> Job-003
 ```
 
-The Sender drives everything, so only the Render Station needs a firewall
-opening. Each step is its own connection, so a laptop sleeping through a long
-render just reconnects afterwards instead of losing the job.
+The same project can be submitted any number of times. Matching hashes must never cause a new job to be rejected.
 
-## Build the Windows installer (FileSender.exe)
+The Sender's original project is never modified or permanently duplicated.
 
-The app ships as a normal Windows installer. On a Windows PC:
+## Offline rule
 
+If the selected Render Station is offline, the **Send** button must be disabled.
+
+If the station disconnects after a job has been created/uploaded, the cloud job remains recoverable. When the station reconnects, it can resume pending work.
+
+## Render Station settings
+
+- Station name
+- Project storage location
+- Accept incoming jobs automatically
+- Delete completed projects after N days
+- Media Encoder location / preset
+
+No Go Online/Go Offline controls are part of the final product.
+
+## Media Encoder
+
+The existing Media Encoder / ExtendScript integration is preserved where possible.
+
+The target flow is:
+
+```text
+Receive project
+  -> validate
+  -> local job workspace
+  -> Media Encoder queue
+  -> render in background
+  -> verify MP4
+  -> upload result
 ```
+
+Media Encoder should remain minimized/below-normal priority and should not steal focus from the Render Station operator.
+
+## Local storage and cleanup
+
+Each remote job gets its own local workspace on the Render Station.
+
+Completed jobs may be deleted according to the configured retention period.
+
+The optional Sender setting **Delete received project after successful delivery** only affects the Render Station copy. It never deletes the Sender's original project.
+
+Cloud files are temporary transport data and should be deleted when the job is safely complete and no longer needs recovery.
+
+## Legacy LAN code
+
+The repository still contains the original V2 LAN implementation for migration/reference purposes.
+
+The LAN implementation is **not** the final Remote V3 architecture.
+
+Do not extend the legacy system as the primary path.
+
+The final normal UI must not expose:
+
+- Go Online
+- Go Offline
+- Pairing code
+- Manual IP entry
+- Manual port entry
+
+## Build the Windows installer
+
+Use:
+
+```text
 scripts\build_installer.bat
 ```
 
-This checks your machine, builds the app, and produces the installer at
-`dist_installer\FileSender.exe`. Run that to install the app like any other
-program (Start Menu entry, uninstall via Windows Settings → Apps). People who
-install it need **no** Python or developer tools.
+The expected installer is:
 
-Full, click-by-click instructions — including the two free tools to install
-first — are in [`docs/BUILD_GUIDE.md`](docs/BUILD_GUIDE.md). To check your PC is
-ready before building, run `python scripts\preflight.py`.
-
-## Run from source (for development)
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m src.main
+```text
+dist_installer\FileSender.exe
 ```
 
-Other entry points:
+The installed application must uninstall normally through Windows Settings or Control Panel.
 
-```powershell
-python -m src.main --station     # run a headless render station (no window)
-python -m src.main --check       # check Media Encoder + agent, then exit
-python -m unittest discover -s tests -t .
-```
+See [`docs/BUILD_GUIDE.md`](docs/BUILD_GUIDE.md).
 
-## Setting up the render PC (one time)
+## Testing status
 
-1. Open the app, go to the **Render station** tab.
-2. Click **Install Media Encoder agent**, then restart Adobe Media Encoder.
-3. In Media Encoder: **Preferences → General → Allow Scripts to Write Files
-   and Access Network** (tick it).
-4. Click **Go online**. Note the IP address and 6-digit code shown.
+Automated tests cover the core, remote, transfer, and rendering logic. The latest handoff reported 99 automated tests passing.
 
-Full steps and firewall commands are in [`docs/SETUP_WINDOWS.md`](docs/SETUP_WINDOWS.md).
+That does not prove the real system is finished. The following still require real testing:
 
-The render runs in the background: Media Encoder opens minimised, at
-below-normal priority, and never steals focus — so the render PC stays usable.
+- Live Supabase project
+- Two different networks
+- Multi-gigabyte internet transfer
+- Windows UI
+- Real Premiere Pro / Adobe Media Encoder
+- Full installed EXE workflow
 
-## Sending a project
+Do not call the system production-ready until the real end-to-end workflow has been verified.
 
-1. On the editing PC, open the **Send a project** tab.
-2. Pick the render station from the list (or type its IP) and enter the code.
-3. Choose the project folder. The `.prproj` and its sequences are detected
-   for you; pick a Media Encoder preset from the station's list and name the
-   output.
-4. Click **Send to render station**.
+## Developer documentation
 
-The app copies only what the station doesn't already have, waits through the
-render, then downloads the MP4 and checks it before saving.
-
-> **Tip:** in Premiere, use **File → Collect Files** (or Project Manager) so all
-> media lives inside one folder before sending. Projects that point at media
-> elsewhere on your drive will show as offline on the render PC.
-
-## Network
-
-- **TCP 49872** — project transfer and MP4 return (inbound on the station).
-- **UDP 49873** — station discovery broadcast (optional; typing an IP works
-  without it).
-
-This is a home-LAN tool: traffic is not encrypted, so don't forward these ports
-to the internet.
-
-## Documentation
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — layers and data flow
-- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the wire protocol
-- [`docs/SETUP_WINDOWS.md`](docs/SETUP_WINDOWS.md) — setup and troubleshooting
-- [`AI_DEVELOPER_GUIDE.md`](AI_DEVELOPER_GUIDE.md) — for anyone (or any AI)
-  continuing the project
-
-## Status
-
-Working end to end in code, with an automated test suite (57 tests) covering
-the protocol, transfer, resume, verification, job queue, job identity, repeated
-sends of the same project, retention/cleanup, and a full send-render-return
-cycle against a stub renderer. Still to verify on real hardware: the live Media
-Encoder scripting hook and the on-screen UI, neither of which can be exercised
-without Windows + Media Encoder. Run `python -m src.main --check` on the render
-PC to confirm that half.
-
-## Features
-
-- **Send the same project as many times as you like** — each send is its own
-  render job (`Job-001`, `Job-002`, …) with isolated storage. Your original
-  project is never moved, copied permanently, or modified.
-- **Automatic background render** — Media Encoder runs minimised, below-normal
-  priority, no focus stealing.
-- **Automatic MP4 return** — checksummed, resumable, saved where you choose.
-- **Receiver-side cleanup** — optionally delete *received* projects after a set
-  number of days. Only ever deletes safely-completed jobs; never touches ones
-  that are transferring, rendering, failed, or incomplete.
-- **Job history** — see every job's status, times, output and errors without
-  opening a log file.
-- **Settings** — one place for storage location, retention, station name,
-  Media Encoder path, preset, pairing code, output folder, and startup options.
+- [`AI_DEVELOPER_GUIDE.md`](AI_DEVELOPER_GUIDE.md) — authoritative development rules
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Remote V3 architecture
+- [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md) — Supabase setup
+- [`docs/BUILD_GUIDE.md`](docs/BUILD_GUIDE.md) — Windows installer build
+- [`docs/SETUP_WINDOWS.md`](docs/SETUP_WINDOWS.md) — Windows / Adobe setup
+- [`docs/REMOTE_V3_GAP_CLOSING_CHANGE_REPORT.txt`](docs/REMOTE_V3_GAP_CLOSING_CHANGE_REPORT.txt) — latest handoff status
