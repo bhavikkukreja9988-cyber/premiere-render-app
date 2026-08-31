@@ -1,0 +1,122 @@
+CHANGE REPORT — Premiere Render App — REMOTE V3 (gap-closing round)
+Branch this targets: continue from the existing V2 branch / remote-v3 work
+Prepared as: full updated project tree (repo-relative paths) + this report
+
+====================================================================
+SUMMARY
+====================================================================
+This round closes four specific gaps identified in a status review of the
+previous Remote V3 milestone (which wired the cloud layer into the real
+render pipeline and the Sender UI, but left some rough edges):
+
+  1. Error messages shown to the user could leak raw/technical exception text
+     instead of the curated friendly text the exception classes already
+     carried. Fixed.
+  2. The backend for manual job acceptance existed (accept_pending /
+     reject_pending) but nothing in the UI ever showed the "New job waiting
+     — Accept / Reject" prompt the plan describes. Fixed with a new banner.
+  3. The first-run experience was two disjointed dialogs (sign in, then
+     separately a storage-location prompt) with no role choice
+     (Sender / Render Station / Both) as the plan describes. Replaced with
+     one consolidated wizard.
+  4. Cloud file transfer read/wrote whole files in memory with no resume
+     support — a real gap for multi-gigabyte Premiere media, and explicitly
+     called for by the plan (sections 3, 21, 64). Replaced with chunked,
+     resumable transfer.
+
+A pre-existing flaky race in two tests (checking a job list before the
+background worker had populated it yet) was also found and fixed while
+testing fix #1; confirmed stable over 5 repeated runs afterward.
+
+====================================================================
+FILES ADDED
+====================================================================
+src/remote/chunked_transfer.py
+    Resumable, chunked upload/download built on the basic Storage primitives
+    (upload/download/list_objects) rather than a specific SDK's resumable-
+    upload feature. Files at or above 32 MB are split into 8 MB chunks with a
+    small JSON manifest; smaller files remain single objects. Upload resume
+    skips parts already on the server; download resume continues from the
+    last complete local chunk. Both directions verify the whole file's
+    SHA-256 once complete.
+
+src/ui/pending_jobs_panel.py
+    PendingJobsPanel: a banner shown above the tabs whenever a job is
+    waiting for manual approval. Lists each waiting job with Accept/Reject
+    buttons and calls the existing RemoteStationWorker methods off the Qt
+    thread. Hidden whenever nothing is waiting.
+
+src/ui/setup_wizard.py
+    SetupWizard: one guided first-run flow — sign in, choose Sender / Render
+    Station / Both, and if Render Station is chosen, station name, storage
+    location, auto-accept, and retention.
+
+tests/test_chunked_transfer.py
+    9 tests covering unchunked small files, large-file chunking/reassembly,
+    monotonic progress, upload resume, download resume, corrupt partial
+    restart, checksum failure, and cancellation.
+
+====================================================================
+FILES MODIFIED
+====================================================================
+src/remote/transport.py
+src/remote/sender_service.py
+src/remote/station_worker.py
+src/remote/storage.py
+src/core/config.py
+src/ui/settings_panel.py
+src/ui/main_window.py
+tests/test_remote_pipeline.py
+tests/test_remote_jobs.py
+tests/test_remote_auth_stations.py
+tests/test_manifest.py
+
+These changes add friendly user-facing errors, connect the new manual approval
+banner and setup wizard, add the Render Station role setting, replace whole-
+file cloud transfers with resumable chunked transfer, and strengthen the
+remote pipeline tests.
+
+====================================================================
+TESTS
+====================================================================
+Total: 99 automated tests, all passing.
+Run:
+    python -m unittest discover -s tests -t .
+
+No network access, no PySide6, and no supabase package required. Full suite
+was re-run three times; the previously flaky pipeline tests were run 5 times
+in isolation after their fix.
+
+UI code remains compile-checked only in the development environment and has
+not yet been rendered on an actual desktop.
+
+====================================================================
+INSTALLER CHANGES
+====================================================================
+None this round. Rebuilding with scripts\\build_installer.bat picks up the
+new code.
+
+====================================================================
+SUPABASE / STORAGE
+====================================================================
+No database schema changes this round. The chunking scheme uses the existing
+project-files and render-results buckets and ordinary storage objects under
+the job prefix.
+
+====================================================================
+KNOWN LIMITATIONS
+====================================================================
+- Not yet run against the live Supabase project.
+- Chunking timing/throughput on a real multi-gigabyte internet transfer is
+  untested.
+- UI additions have not been seen on a real screen.
+- Sign-out behavior still has a known restart-related limitation.
+- Legacy LAN error handling was not changed.
+- Real Windows, Adobe Media Encoder, and two-network testing remain required.
+
+====================================================================
+MANUAL STEPS
+====================================================================
+Use docs/SUPABASE_SETUP.md for Supabase setup, scripts\\build_installer.bat
+for Windows installer builds, and docs/SETUP_WINDOWS.md for Media Encoder
+setup.
