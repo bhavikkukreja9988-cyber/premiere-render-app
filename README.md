@@ -31,7 +31,24 @@ The Sender drives everything, so only the Render Station needs a firewall
 opening. Each step is its own connection, so a laptop sleeping through a long
 render just reconnects afterwards instead of losing the job.
 
-## Install and run (from source)
+## Build the Windows installer (FileSender.exe)
+
+The app ships as a normal Windows installer. On a Windows PC:
+
+```
+scripts\build_installer.bat
+```
+
+This checks your machine, builds the app, and produces the installer at
+`dist_installer\FileSender.exe`. Run that to install the app like any other
+program (Start Menu entry, uninstall via Windows Settings → Apps). People who
+install it need **no** Python or developer tools.
+
+Full, click-by-click instructions — including the two free tools to install
+first — are in [`docs/BUILD_GUIDE.md`](docs/BUILD_GUIDE.md). To check your PC is
+ready before building, run `python scripts\preflight.py`.
+
+## Run from source (for development)
 
 ```powershell
 python -m venv .venv
@@ -40,21 +57,13 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
-Other ways to start it:
+Other entry points:
 
 ```powershell
 python -m src.main --station     # run a headless render station (no window)
 python -m src.main --check       # check Media Encoder + agent, then exit
 python -m unittest discover -s tests -t .
 ```
-
-## Build a Windows .exe
-
-```powershell
-scripts\build_windows.bat
-```
-
-The result is in `dist\PremiereRenderApp\`.
 
 ## Setting up the render PC (one time)
 
@@ -104,9 +113,26 @@ to the internet.
 
 ## Status
 
-Working end to end in code, with an automated test suite (46 tests) covering
-the protocol, transfer, resume, job queue and a full send-render-return cycle
-against a stub renderer. Still to verify on real hardware: the live Media
+Working end to end in code, with an automated test suite (57 tests) covering
+the protocol, transfer, resume, verification, job queue, job identity, repeated
+sends of the same project, retention/cleanup, and a full send-render-return
+cycle against a stub renderer. Still to verify on real hardware: the live Media
 Encoder scripting hook and the on-screen UI, neither of which can be exercised
 without Windows + Media Encoder. Run `python -m src.main --check` on the render
 PC to confirm that half.
+
+## Features
+
+- **Send the same project as many times as you like** — each send is its own
+  render job (`Job-001`, `Job-002`, …) with isolated storage. Your original
+  project is never moved, copied permanently, or modified.
+- **Automatic background render** — Media Encoder runs minimised, below-normal
+  priority, no focus stealing.
+- **Automatic MP4 return** — checksummed, resumable, saved where you choose.
+- **Receiver-side cleanup** — optionally delete *received* projects after a set
+  number of days. Only ever deletes safely-completed jobs; never touches ones
+  that are transferring, rendering, failed, or incomplete.
+- **Job history** — see every job's status, times, output and errors without
+  opening a log file.
+- **Settings** — one place for storage location, retention, station name,
+  Media Encoder path, preset, pairing code, output folder, and startup options.
