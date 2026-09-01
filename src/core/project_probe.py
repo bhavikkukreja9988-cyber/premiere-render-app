@@ -118,8 +118,13 @@ def probe_project(path: Path) -> ProjectInfo:
 # by version. This is a heuristic, not a full parser: it looks for path-shaped
 # strings and flags ones that clearly point outside the project folder. It can
 # miss things and can also over-flag; it exists to warn, not to block silently.
-_WIN_PATH_RE = re.compile(r'[A-Za-z]:[\\/][^"<>\x00-\x1f]{3,400}')
-_FILE_URL_RE = re.compile(r'file://(?:localhost)?/[^"\s<>\x00-\x1f]{3,400}')
+# The drive-letter pattern must not match inside a word — without the lookbehind
+# it happily matches the "e:" in "fil(e:)//C:/..." and produces a mangled
+# "e://C:/..." path that then looks like external media.
+_WIN_PATH_RE = re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:[\\/][^"<>\x00-\x1f]{3,400}')
+# Windows file URLs appear both as file:///C:/... and file://C:/..., so the
+# third slash has to be optional or Windows paths are missed entirely.
+_FILE_URL_RE = re.compile(r'file://(?:localhost)?/?[^"\s<>\x00-\x1f]{3,400}')
 _MAX_EXTERNAL_HITS = 25
 
 
@@ -127,7 +132,14 @@ def _file_url_to_path(url: str) -> str:
     from urllib.parse import unquote, urlsplit
     parsed = urlsplit(url)
     raw = unquote(parsed.path)
-    # A Windows path shows up as file:///C:/... -> path is "/C:/...".
+    # Windows URLs come in two shapes:
+    #   file:///C:/...  -> netloc "",   path "/C:/..."
+    #   file://C:/...   -> netloc "C:", path "/..."   (drive lands in netloc)
+    # Without handling the second form the drive letter is silently dropped
+    # and the resulting path is wrong.
+    netloc = unquote(parsed.netloc)
+    if re.fullmatch(r"[A-Za-z]:", netloc):
+        return netloc + raw
     if re.match(r"^/[A-Za-z]:", raw):
         raw = raw[1:]
     return raw
