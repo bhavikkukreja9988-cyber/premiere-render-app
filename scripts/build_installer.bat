@@ -1,71 +1,54 @@
 @echo off
 REM ===========================================================================
-REM  Build FileSender.exe  (the Premiere Render App installer)
+REM  Build FileSender.exe installer
 REM
-REM  What this does, in order:
-REM    1. Checks your machine is ready (preflight)
-REM    2. Creates a clean Python environment
-REM    3. Installs the app's dependencies
-REM    4. Runs the automated tests
-REM    5. Builds the app with PyInstaller
-REM    6. Wraps it into the installer with Inno Setup
-REM
-REM  You run this ONCE. The finished installer appears at:
-REM    dist_installer\FileSender.exe
-REM
-REM  Just double-click this file, or run it from a terminal. If anything is
-REM  missing it stops and tells you exactly what to fix.
+REM  Steps:
+REM    1. Preflight the Windows build machine
+REM    2. Create a clean build virtual environment
+REM    3. Install app dependencies + PyInstaller
+REM    4. Run the active automated tests
+REM    5. Build the FileSender desktop executable
+REM    6. Wrap it with Inno Setup as dist_installer\FileSender.exe
 REM ===========================================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0.."
 
 echo.
 echo ==========================================================
-echo  Premiere Render App - installer build
+echo  FileSender - installer build
 echo ==========================================================
 echo.
 
-REM --- locate Python -------------------------------------------------------
 where python >nul 2>&1
 if errorlevel 1 (
     echo [FAIL] Python was not found on PATH.
-    echo        Install Python 3.10+ from https://www.python.org/downloads/
-    echo        and tick "Add python.exe to PATH" during setup.
+    echo        Install Python 3.10+ and tick "Add python.exe to PATH".
     goto :fail
 )
 
-REM --- step 1: preflight ---------------------------------------------------
-echo [1/6] Checking your machine is ready...
+echo [1/6] Checking build environment...
 python scripts\preflight.py
-if errorlevel 1 (
-    echo.
-    echo Preflight found problems. Fix the [FAIL] items above, then run again.
-    goto :fail
-)
+if errorlevel 1 goto :fail
 
-REM --- step 2: virtual environment -----------------------------------------
 echo.
-echo [2/6] Preparing a clean build environment...
+echo [2/6] Preparing clean build environment...
 if not exist ".venv_build" (
     python -m venv .venv_build || goto :fail
 )
 call .venv_build\Scripts\activate.bat || goto :fail
 
-REM --- step 3: dependencies ------------------------------------------------
 echo.
-echo [3/6] Installing dependencies (this can take a few minutes)...
-python -m pip install --upgrade pip >nul
+echo [3/6] Installing dependencies...
+python -m pip install --upgrade pip >nul || goto :fail
 python -m pip install -r requirements.txt || goto :fail
 python -m pip install pyinstaller || goto :fail
 
-REM --- step 4: tests -------------------------------------------------------
 echo.
 echo [4/6] Running automated tests...
 python -m unittest discover -s tests -t . || goto :testfail
 
-REM --- step 5: PyInstaller --------------------------------------------------
 echo.
-echo [5/6] Building the application...
+echo [5/6] Building FileSender.exe...
 if exist "build_app" rmdir /s /q "build_app"
 if exist "build_pyi" rmdir /s /q "build_pyi"
 pyinstaller --noconfirm --clean ^
@@ -73,21 +56,20 @@ pyinstaller --noconfirm --clean ^
     --workpath build_pyi ^
     installer\PremiereRenderApp.spec || goto :fail
 
-if not exist "build_app\PremiereRenderApp\PremiereRenderApp.exe" (
-    echo [FAIL] PyInstaller did not produce the expected executable.
+if not exist "build_app\FileSender\FileSender.exe" (
+    echo [FAIL] Expected build_app\FileSender\FileSender.exe was not created.
     goto :fail
 )
 
-REM --- step 6: Inno Setup ---------------------------------------------------
 echo.
-echo [6/6] Building the installer (FileSender.exe)...
+echo [6/6] Building installer...
 set "ISCC="
 where ISCC >nul 2>&1 && set "ISCC=ISCC"
 if "!ISCC!"=="" if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if "!ISCC!"=="" if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
 if "!ISCC!"=="" (
-    echo [FAIL] Inno Setup compiler ^(ISCC^) not found.
-    echo        Install Inno Setup 6 from https://jrsoftware.org/isdl.php
+    echo [FAIL] Inno Setup compiler ISCC.exe was not found.
+    echo        Install Inno Setup 6 and run this script again.
     goto :fail
 )
 
@@ -95,19 +77,14 @@ if exist "dist_installer" rmdir /s /q "dist_installer"
 "!ISCC!" installer\FileSender.iss || goto :fail
 
 if not exist "dist_installer\FileSender.exe" (
-    echo [FAIL] Inno Setup did not produce FileSender.exe.
+    echo [FAIL] Installer was not created.
     goto :fail
 )
 
 echo.
 echo ==========================================================
 echo  SUCCESS
-echo.
-echo  Your installer is ready:
-echo      dist_installer\FileSender.exe
-echo.
-echo  Copy that one file to any Windows PC and run it to install
-echo  the app. No Python needed on those PCs.
+echo  dist_installer\FileSender.exe
 echo ==========================================================
 call deactivate >nul 2>&1
 pause
@@ -115,15 +92,14 @@ exit /b 0
 
 :testfail
 echo.
-echo [FAIL] Automated tests did not pass. The build was stopped so you don't
-echo        ship a broken app. Send the messages above to your developer.
+echo [FAIL] Automated tests failed. No installer was produced.
 call deactivate >nul 2>&1
 pause
 exit /b 1
 
 :fail
 echo.
-echo Build stopped. See the message above for what to fix.
+echo Build stopped. Fix the failure above and run again.
 call deactivate >nul 2>&1
 pause
 exit /b 1
