@@ -1,3 +1,3 @@
-"""Premiere Render App — send a Premiere project to a LAN render station, render it, get the MP4 back."""
+"""FileSender — remote Premiere Pro project transfer and rendering."""
 
-__version__ = "3.0.0"
+__version__ = "3.0.1"
