@@ -147,7 +147,8 @@ class RemoteStationWorker:
         try:
             from ..render import media_encoder as ame
             return [name for name, _ in ame.list_presets()]
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("could not read Media Encoder presets: %s", exc)
             return []
 
     def _reconcile_local_results(self) -> None:
