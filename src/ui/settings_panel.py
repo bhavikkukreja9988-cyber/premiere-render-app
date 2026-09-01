@@ -1,22 +1,16 @@
-"""Settings tab.
-
-A single place for every configurable value the app has, grouped into Render
-Station, Sender and General, matching the settings list in the project spec.
-Nothing here is hard-coded elsewhere; this reads and writes the persisted
-``AppConfig``.
-"""
+"""Cloud-first application settings UI."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout,
-                               QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QSpinBox, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+)
 
-from ..core.config import AppConfig, new_pairing_code, save_config
+from ..core.config import AppConfig, save_config
 from ..core.log import get_logger
 from .theme import MUTED, OK, WARN
 
@@ -28,19 +22,9 @@ class SettingsPanel(QWidget):
                  on_signed_in=None, get_station_backend=None) -> None:
         super().__init__()
         self.config = config
-        self.client = client          # optional RemoteClient; None if unavailable
-        # MainWindow owns the render-station worker, so sign-out/sign-in need
-        # to go through it: the worker must stop (and mark itself offline)
-        # *before* the session is cleared, and a fresh worker needs starting
-        # after a new sign-in. These callbacks let Settings trigger that
-        # without knowing anything about the worker itself.
+        self.client = client
         self._on_sign_out = on_sign_out
         self._on_signed_in = on_signed_in
-        # Callable returning the name of whichever render engine the cloud
-        # station is actually using right now ("Adobe Media Encoder" or the
-        # manual fallback), or "" if no station is running. Read live so it
-        # stays correct across sign-out/sign-in and Media Encoder detection
-        # changing while Settings is open.
         self._get_station_backend = get_station_backend
         self._build()
         self._load()
@@ -49,12 +33,10 @@ class SettingsPanel(QWidget):
         self._backend_timer.start(3000)
         self._refresh_backend_status()
 
-    # -- construction -----------------------------------------------------
     def _build(self) -> None:
         outer = QVBoxLayout(self)
         outer.setSpacing(12)
 
-        # Account ---------------------------------------------------------
         account_box = QGroupBox("Account")
         account_form = QFormLayout(account_box)
         self.account_label = QLabel("Not signed in")
@@ -69,24 +51,24 @@ class SettingsPanel(QWidget):
         account_form.addRow("Signed in as", account_row)
         outer.addWidget(account_box)
 
-        # Render Station ------------------------------------------------
-        station_box = QGroupBox("Render station")
+        station_box = QGroupBox("Render Station")
         station_form = QFormLayout(station_box)
-
         self.station_name = QLineEdit()
         station_form.addRow("Station name", self.station_name)
 
-        self.station_role_enabled = QCheckBox(
-            "Also act as a Render Station (receive and render projects)")
-        station_form.addRow("", self.station_role_enabled)
+        self.station_role_enabled = QCheckBox("This PC can receive and render projects")
+        station_form.addRow("Role", self.station_role_enabled)
 
         storage_row = QHBoxLayout()
         self.storage_dir = QLineEdit()
-        storage_browse = QPushButton("Browse…")
-        storage_browse.clicked.connect(self._pick_storage)
-        storage_row.addWidget(self.storage_dir, 4)
-        storage_row.addWidget(storage_browse, 1)
-        station_form.addRow("Project storage location", storage_row)
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._pick_storage)
+        storage_row.addWidget(self.storage_dir, 1)
+        storage_row.addWidget(browse)
+        station_form.addRow("Project storage", storage_row)
+
+        self.accept_automatically = QCheckBox("Accept incoming jobs automatically")
+        station_form.addRow("New jobs", self.accept_automatically)
 
         self.retention = QComboBox()
         for label, days in AppConfig.RETENTION_CHOICES:
@@ -99,33 +81,29 @@ class SettingsPanel(QWidget):
         self.retention_custom.setVisible(False)
         retention_row = QHBoxLayout()
         retention_row.addWidget(self.retention, 1)
-        retention_row.addWidget(self.retention_custom, 1)
+        retention_row.addWidget(self.retention_custom)
         station_form.addRow("Delete completed projects after", retention_row)
 
-        retention_note = QLabel(
-            "Only applies to received projects that have finished and been "
-            "returned. Never deletes jobs that are transferring, rendering, "
-            "failed or incomplete. Your original projects are never touched.")
-        retention_note.setObjectName("hint")
-        retention_note.setWordWrap(True)
-        station_form.addRow("", retention_note)
+        note = QLabel(
+            "The station is online automatically while FileSender is open. "
+            "Closing the app takes it offline. No IP address, port, or pairing "
+            "code is required.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        station_form.addRow("", note)
 
         ame_row = QHBoxLayout()
         self.ame_path = QLineEdit()
-        self.ame_path.setPlaceholderText("auto-detected if left blank")
+        self.ame_path.setPlaceholderText("auto-detected if blank")
         ame_browse = QPushButton("Browse…")
         ame_browse.clicked.connect(self._pick_ame)
-        ame_row.addWidget(self.ame_path, 4)
-        ame_row.addWidget(ame_browse, 1)
-        station_form.addRow("Media Encoder location", ame_row)
+        ame_row.addWidget(self.ame_path, 1)
+        ame_row.addWidget(ame_browse)
+        station_form.addRow("Media Encoder", ame_row)
 
         self.default_preset = QLineEdit()
-        self.default_preset.setPlaceholderText("Media Encoder preset name")
-        station_form.addRow("Default export preset", self.default_preset)
-
-        self.accept_automatically = QCheckBox(
-            "Accept incoming jobs automatically")
-        station_form.addRow("New jobs", self.accept_automatically)
+        self.default_preset.setPlaceholderText("optional default preset name")
+        station_form.addRow("Default preset", self.default_preset)
 
         self.station_id_label = QLabel()
         self.station_id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -134,74 +112,36 @@ class SettingsPanel(QWidget):
         self.backend_status_label = QLabel("—")
         self.backend_status_label.setWordWrap(True)
         station_form.addRow("Render engine", self.backend_status_label)
-
         outer.addWidget(station_box)
 
-        # Local network (advanced) --------------------------------------
-        # These only matter for the legacy same-network mode; most people
-        # never need them because the cloud connection handles everything.
-        legacy_box = QGroupBox("Local network (advanced, optional)")
-        legacy_form = QFormLayout(legacy_box)
-        legacy_note = QLabel(
-            "Only needed for the legacy same-network mode. The normal, "
-            "internet-based Sender and Render Station flow does not use any "
-            "of this.")
-        legacy_note.setObjectName("hint")
-        legacy_note.setWordWrap(True)
-        legacy_form.addRow("", legacy_note)
-
-        self.autostart = QCheckBox("Go online automatically when the app opens")
-        legacy_form.addRow("Auto-start local station", self.autostart)
-
-        code_row = QHBoxLayout()
-        self.require_code = QCheckBox("Require a pairing code")
-        self.code_value = QLabel()
-        self.code_value.setObjectName("heading")
-        new_code = QPushButton("New code")
-        new_code.clicked.connect(self._new_code)
-        code_row.addWidget(self.require_code)
-        code_row.addWidget(self.code_value)
-        code_row.addWidget(new_code)
-        code_row.addStretch(1)
-        legacy_form.addRow("Pairing code", code_row)
-
-        outer.addWidget(legacy_box)
-
-        # Sender --------------------------------------------------------
         sender_box = QGroupBox("Sender")
         sender_form = QFormLayout(sender_box)
-
         out_row = QHBoxLayout()
         self.output_dir = QLineEdit()
         out_browse = QPushButton("Browse…")
         out_browse.clicked.connect(self._pick_output)
-        out_row.addWidget(self.output_dir, 4)
-        out_row.addWidget(out_browse, 1)
+        out_row.addWidget(self.output_dir, 1)
+        out_row.addWidget(out_browse)
         sender_form.addRow("Output folder", out_row)
-
         self.sender_name = QLineEdit()
         sender_form.addRow("Sender name", self.sender_name)
-
-        self.last_station = QLineEdit()
-        self.last_station.setPlaceholderText("remembered automatically")
-        sender_form.addRow("Last render station", self.last_station)
-
+        self.last_station = QLabel("Remembered automatically")
+        self.last_station.setObjectName("hint")
+        sender_form.addRow("Render Station", self.last_station)
+        self.delete_remote_after_return = QCheckBox(
+            "Delete received project after successful delivery")
+        sender_form.addRow("Cleanup", self.delete_remote_after_return)
         outer.addWidget(sender_box)
 
-        # General -------------------------------------------------------
         general_box = QGroupBox("General")
         general_form = QFormLayout(general_box)
-
-        self.start_with_windows = QCheckBox("Start this app when Windows starts")
+        self.start_with_windows = QCheckBox("Start FileSender when Windows starts")
         general_form.addRow("Startup", self.start_with_windows)
-
         self.log_level = QComboBox()
         self.log_level.addItems(["INFO", "DEBUG", "WARNING", "ERROR"])
-        general_form.addRow("Logging level", self.log_level)
-
+        general_form.addRow("Logging", self.log_level)
         outer.addWidget(general_box)
 
-        # Save ----------------------------------------------------------
         save_row = QHBoxLayout()
         self.saved_label = QLabel("")
         self.saved_label.setObjectName("hint")
@@ -213,7 +153,6 @@ class SettingsPanel(QWidget):
         outer.addLayout(save_row)
         outer.addStretch(1)
 
-    # -- load / save ------------------------------------------------------
     def _load(self) -> None:
         c = self.config
         self.station_name.setText(c.station_name)
@@ -224,13 +163,10 @@ class SettingsPanel(QWidget):
         self.default_preset.setText(c.default_preset)
         self.accept_automatically.setChecked(c.accept_jobs_automatically)
         self.station_id_label.setText(c.station_id)
-        self.autostart.setChecked(c.autostart_station)
-        self.require_code.setChecked(c.require_pairing)
-        self.code_value.setText(c.pairing_code)
         self.output_dir.setText(c.output_dir)
         self.sender_name.setText(c.sender_name)
-        self.last_station.setText(c.last_station_host)
         self.start_with_windows.setChecked(c.start_with_windows)
+        self.delete_remote_after_return.setChecked(c.delete_remote_after_return)
         self.log_level.setCurrentText(c.log_level)
         self._refresh_account_label()
 
@@ -238,29 +174,20 @@ class SettingsPanel(QWidget):
         name = self._get_station_backend() if self._get_station_backend else ""
         if not name:
             self.backend_status_label.setText(
-                f"<span style='color:{MUTED}'>Not running — the cloud render "
-                "station isn't active on this PC right now.</span>")
+                f"<span style='color:{MUTED}'>Render Station is not active on this PC.</span>")
         elif "manual" in name.lower():
             self.backend_status_label.setText(
-                f"<span style='color:{WARN}'>{name}</span> — Media Encoder "
-                "isn't set up to render automatically. Jobs will sit "
-                "waiting until you render them by hand and drop the file in "
-                "the job's output folder. Check Media Encoder is installed, "
-                "running, and has 'Allow Scripts to Write Files and Access "
-                "Network' enabled in its Preferences.")
+                f"<span style='color:{WARN}'>{name}</span> — Media Encoder automation "
+                "is unavailable; jobs require manual rendering.")
         else:
             self.backend_status_label.setText(
-                f"<span style='color:{OK}'>{name}</span> — rendering "
-                "automatically.")
+                f"<span style='color:{OK}'>{name}</span> — automated rendering is active.")
 
     def _refresh_account_label(self) -> None:
         signed_in = bool(self.client and self.client.signed_in)
-        if signed_in:
-            self.account_label.setText(
-                f"<span style='color:{OK}'>{self.client.auth.username}</span>")
-        else:
-            self.account_label.setText(
-                f"<span style='color:{MUTED}'>Not signed in</span>")
+        self.account_label.setText(
+            f"<span style='color:{OK}'>{self.client.auth.username}</span>"
+            if signed_in else f"<span style='color:{MUTED}'>Not signed in</span>")
         self.sign_in_button.setVisible(bool(self.client) and not signed_in)
         self.sign_out_button.setVisible(signed_in)
 
@@ -270,21 +197,16 @@ class SettingsPanel(QWidget):
                 self.retention.setCurrentIndex(i)
                 self.retention_custom.setVisible(False)
                 return
-        # Not one of the presets -> Custom
-        custom_index = self.retention.count() - 1
-        self.retention.setCurrentIndex(custom_index)
+        self.retention.setCurrentIndex(self.retention.count() - 1)
         self.retention_custom.setValue(max(1, days))
         self.retention_custom.setVisible(True)
 
     def _retention_changed(self, _index: int) -> None:
-        is_custom = self.retention.currentData() == -1
-        self.retention_custom.setVisible(is_custom)
+        self.retention_custom.setVisible(self.retention.currentData() == -1)
 
     def _current_retention_days(self) -> int:
         data = self.retention.currentData()
-        if data == -1:
-            return int(self.retention_custom.value())
-        return int(data)
+        return int(self.retention_custom.value() if data == -1 else data)
 
     def _save(self) -> None:
         c = self.config
@@ -295,26 +217,19 @@ class SettingsPanel(QWidget):
         c.ame_path = self.ame_path.text().strip()
         c.default_preset = self.default_preset.text().strip()
         c.accept_jobs_automatically = self.accept_automatically.isChecked()
-        c.autostart_station = self.autostart.isChecked()
-        c.require_pairing = self.require_code.isChecked()
         c.output_dir = self.output_dir.text().strip() or c.output_dir
         c.sender_name = self.sender_name.text().strip() or c.sender_name
         c.start_with_windows = self.start_with_windows.isChecked()
+        c.delete_remote_after_return = self.delete_remote_after_return.isChecked()
         c.log_level = self.log_level.currentText()
         save_config(c)
-        self._apply_start_with_windows(c.start_with_windows)
-        self.saved_label.setText(
-            f"<span style='color:{OK}'>Saved. Some changes apply next time the "
-            f"station goes online.</span>")
-
-    def _apply_start_with_windows(self, enabled: bool) -> None:
         try:
             from ..core import autostart
-            autostart.set_start_with_windows(enabled)
-        except Exception as exc:                              # noqa: BLE001
+            autostart.set_start_with_windows(c.start_with_windows)
+        except Exception as exc:  # noqa: BLE001
             logger.warning("could not update Windows startup: %s", exc)
+        self.saved_label.setText(f"<span style='color:{OK}'>Saved.</span>")
 
-    # -- pickers ----------------------------------------------------------
     def _pick_storage(self) -> None:
         folder = QFileDialog.getExistingDirectory(
             self, "Where should received Premiere projects be stored?",
@@ -333,20 +248,12 @@ class SettingsPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, "Locate Adobe Media Encoder.exe",
             self.ame_path.text() or "C:/Program Files/Adobe",
-            "Adobe Media Encoder (Adobe Media Encoder.exe);;All files (*.*)")
+            "Adobe Media Encoder (*.exe);;All files (*.*)")
         if path:
             self.ame_path.setText(path)
 
-    def _new_code(self) -> None:
-        self.config.pairing_code = new_pairing_code()
-        self.code_value.setText(self.config.pairing_code)
-        save_config(self.config)
-
     def _sign_out(self) -> None:
         if self._on_sign_out:
-            # MainWindow stops the render-station worker (marking it offline
-            # while still authenticated) and then clears the session, in
-            # that order — takes effect immediately, no restart needed.
             self._on_sign_out()
         elif self.client:
             self.client.auth.sign_out()
@@ -355,8 +262,8 @@ class SettingsPanel(QWidget):
     def _sign_in(self) -> None:
         if not self.client:
             return
-        from PySide6.QtWidgets import QDialog
         from .remote_login import LoginDialog
+        from PySide6.QtWidgets import QDialog
         dialog = LoginDialog(self.client, self)
         if dialog.exec() == QDialog.Accepted and self._on_signed_in:
             self._on_signed_in()
