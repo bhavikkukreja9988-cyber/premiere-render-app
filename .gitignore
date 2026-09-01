@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+
+# Build environments
+.venv/
+venv/
+.venv_build/
+
+# Installer build output
+build/
+build_app/
+build_pyi/
+dist/
+dist_installer/
+
+# Never commit built Windows executables/installer artifacts
+*.exe
+
+# Local environment overrides
+.env
+
+# Logs and test caches
+*.log
+.pytest_cache/
+
+# IDE / OS metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local session tokens and machine-specific config
+session.json
+config.json
