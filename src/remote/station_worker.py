@@ -1,24 +1,8 @@
-"""Remote render-station worker.
+"""Cloud Render Station worker.
 
-This is Phase 7: it connects the Supabase job queue to the *existing* V2
-render pipeline (``core.jobs.JobStore`` + ``render.pipeline.RenderManager``)
-instead of replacing that machinery. The worker's job is purely translation:
-
-    cloud job appears / recovers
-        -> download project from Storage into a local job workspace
-        -> hand it to the same JobStore + RenderManager the LAN path used
-        -> when the local render finishes, upload the result and tell the
-           cloud the job is ready
-        -> once the sender confirms delivery, clean up safely
-
-There is no "Go Online" button: constructing and starting this worker *is*
-going online, and stopping it (on app close) is going offline. No hidden
-process continues after the app exits — ``stop()`` is called from the window's
-closeEvent before the process exits.
-
-Local job state (JobState) and cloud job state (RemoteJobState) are related but
-not identical; this worker keeps them in step at the points that matter
-(queued, rendering, encoded/failed) without trying to mirror every transition.
+Bridges Supabase remote jobs to the existing local JobStore/RenderManager and
+Adobe Media Encoder pipeline. The worker is active only while FileSender is
+open; stop() removes its heartbeat and marks the station offline.
 """
 
 from __future__ import annotations
@@ -32,7 +16,6 @@ from ..core import workspace
 from ..core.config import AppConfig
 from ..core.jobs import JobRecord, JobSpec, JobState, JobStore
 from ..core.log import get_logger
-from ..core.manifest import hash_file
 from ..core.retention import RetentionManager
 from ..render.pipeline import RenderManager, build_backend
 from .client import RemoteClient
@@ -41,12 +24,11 @@ from .transport import RemoteError, friendly_message
 
 logger = get_logger("remote.station_worker")
 
-RECOVERY_POLL_SECONDS = 20.0     # fallback sweep in case a realtime event is missed
-CLEANUP_POLL_SECONDS = 30.0
+RECOVERY_POLL_SECONDS = 20.0
 
 
 class RemoteStationWorker:
-    """Owns this PC's presence as a remote render station."""
+    """Own the cloud-visible presence and render queue for one station."""
 
     def __init__(self, client: RemoteClient, config: AppConfig,
                  on_event: Optional[Callable[[str, dict], None]] = None,
@@ -57,114 +39,124 @@ class RemoteStationWorker:
 
         workspace.ensure_workspace(config.workspace)
         self.local_store = JobStore(
-            workspace.jobs_file(config.workspace),
-            jobs_root=config.workspace / "jobs",
+            workspace.jobs_file(config.workspace), jobs_root=config.workspace / "jobs"
         )
+
         if backend is None:
-            # build_backend() below only picks Media Encoder if the agent is
-            # ALREADY installed at this exact moment — otherwise it silently
-            # falls back to manual rendering for the rest of this session,
-            # even on a PC with Media Encoder fully installed. Make sure the
-            # agent is in place first so a station that's never opened the
-            # legacy tab still gets automated rendering on its very first run.
             try:
                 from ..render import media_encoder as ame
                 ame.install_agent()
-            except Exception as exc:                        # noqa: BLE001
-                logger.warning("could not pre-install the Media Encoder "
-                               "agent: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not install the Media Encoder agent: %s", exc)
+
         self.backend = backend or build_backend(config)
-        self.manager = RenderManager(self.local_store, self.backend, config,
-                                     self._on_local_event)
+        self.manager = RenderManager(
+            self.local_store, self.backend, config, self._on_local_event
+        )
         self.retention = RetentionManager(
-            self.local_store, config.workspace,
+            self.local_store,
+            config.workspace,
             retention_days_provider=lambda: self.config.retention_days,
             remove_job_dir=lambda job_id: workspace.remove_job_dir(
-                self.config.workspace, job_id),
+                self.config.workspace, job_id
+            ),
             busy_job_provider=lambda: self.manager.current_job,
             on_event=self.on_event,
         )
 
         self._stop = threading.Event()
         self._recovery_thread: Optional[threading.Thread] = None
-        self._cleanup_thread: Optional[threading.Thread] = None
         self._unsubscribe = None
-        self._downloading: Dict[str, bool] = {}   # remote_job_id -> in progress
-        self._cloud_cleaned: Dict[str, bool] = {}  # remote_job_id -> done
-        self.pending_manual: Dict[str, RemoteJob] = {}  # awaiting user accept
+        self._downloading: Dict[str, bool] = {}
+        self.pending_manual: Dict[str, RemoteJob] = {}
+        self.started = False
 
-    # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
-        """Register, heartbeat, recover pending jobs, and start listening.
-
-        This is "going online" — there is no separate toggle.
-        """
-        local_ip = self._local_ip()
-        capabilities = {"presets": self._local_presets(),
-                        "accepts_automatically": self.config.accept_jobs_automatically}
+        """Register and expose this PC as an online Render Station."""
+        if self.started:
+            return
+        capabilities = {
+            "presets": self._local_presets(),
+            "accepts_automatically": self.config.accept_jobs_automatically,
+        }
         self.client.stations.register(
-            self.config.station_id, self.config.station_name,
-            app_version=__version__, local_ip=local_ip,
-            capabilities=capabilities)
+            self.config.station_id,
+            self.config.station_name,
+            app_version=__version__,
+            local_ip=self._local_ip(),
+            capabilities=capabilities,
+        )
         self.client.stations.start_heartbeat(self.config.station_id)
         self.manager.start()
         self.retention.start()
-
+        self._reconcile_local_results()
         self._unsubscribe = self.client.jobs.watch_station_jobs(
-            self.config.station_id, self._on_remote_job_event)
-
+            self.config.station_id, self._on_remote_job_event
+        )
         self._stop.clear()
         self._recovery_thread = threading.Thread(
-            target=self._recovery_loop, name="remote-station-recovery",
-            daemon=True)
+            target=self._recovery_loop, name="remote-station-recovery", daemon=True
+        )
         self._recovery_thread.start()
-        self._cleanup_thread = threading.Thread(
-            target=self._cleanup_loop, name="remote-station-cleanup",
-            daemon=True)
-        self._cleanup_thread.start()
-
-        logger.info("remote station %s (%s) online", self.config.station_id,
-                    self.config.station_name)
+        self.started = True
+        logger.info("remote station %s online", self.config.station_id)
         self.on_event("remote_station_online", {"station_id": self.config.station_id})
 
     def stop(self) -> None:
-        """Stop heartbeating, unsubscribe, mark offline. No background process
-        survives this — call it before the app process exits."""
+        """Stop all cloud worker activity and mark the station offline."""
+        if not self.started:
+            return
         self._stop.set()
         if self._unsubscribe:
             try:
                 self._unsubscribe()
-            except Exception:                       # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001
+                logger.debug("remote job subscription shutdown failed", exc_info=True)
+            self._unsubscribe = None
         if self._recovery_thread:
             self._recovery_thread.join(timeout=2.0)
-        if self._cleanup_thread:
-            self._cleanup_thread.join(timeout=2.0)
+            self._recovery_thread = None
         self.retention.stop()
         self.manager.stop()
         try:
             self.client.stations.go_offline(self.config.station_id)
         except RemoteError as exc:
             logger.warning("could not mark station offline: %s", exc)
-        logger.info("remote station %s offline", self.config.station_id)
+        self.started = False
         self.on_event("remote_station_offline", {"station_id": self.config.station_id})
 
     @staticmethod
     def _local_ip() -> str:
         try:
-            from ..network.discovery import local_ip
+            from .network_utils import local_ip
             return local_ip()
-        except Exception:                            # noqa: BLE001
+        except Exception:  # noqa: BLE001
             return ""
 
     def _local_presets(self) -> list:
         try:
             from ..render import media_encoder as ame
             return [name for name, _ in ame.list_presets()]
-        except Exception:                            # noqa: BLE001
+        except Exception:  # noqa: BLE001
             return []
 
-    # -- realtime + recovery --------------------------------------------------
+    def _reconcile_local_results(self) -> None:
+        for record in self.local_store.list():
+            if record.state not in (JobState.ENCODED, JobState.COMPLETE):
+                continue
+            output = Path(record.output_path) if record.output_path else None
+            if not output or not output.is_file():
+                continue
+            try:
+                remote_job = self.client.jobs.get_job(record.job_id)
+                if remote_job and remote_job.state not in (
+                    RemoteJobState.READY_FOR_DOWNLOAD,
+                    RemoteJobState.COMPLETE,
+                ):
+                    self._upload_result(record.job_id, output)
+            except RemoteError as exc:
+                logger.debug("could not reconcile %s: %s", record.job_id[:8], exc)
+
     def _on_remote_job_event(self, event_type: str, job: RemoteJob) -> None:
         if job.state in (RemoteJobState.UPLOADED, RemoteJobState.WAITING_FOR_STATION):
             self._consider_job(job)
@@ -172,13 +164,9 @@ class RemoteStationWorker:
             self._handle_cancel(job)
 
     def _recovery_loop(self) -> None:
-        # Runs once immediately (so jobs waiting from before this launch are
-        # picked up right away), then periodically as a safety net for any
-        # realtime event that was missed.
         while not self._stop.is_set():
             try:
-                for job in self.client.jobs.pending_for_station(
-                        self.config.station_id):
+                for job in self.client.jobs.pending_for_station(self.config.station_id):
                     self._consider_job(job)
             except RemoteError as exc:
                 logger.debug("recovery sweep failed: %s", exc)
@@ -188,27 +176,50 @@ class RemoteStationWorker:
         if self._downloading.get(job.id):
             return
         if job.state is RemoteJobState.WAITING_FOR_STATION:
-            if not self.config.accept_jobs_automatically:
-                if job.id not in self.pending_manual:
-                    self.pending_manual[job.id] = job
-                    self.on_event("job_awaiting_acceptance",
-                                 {"job_id": job.id, "label": job.display_label})
-                return
-            # Automatic acceptance was turned on after this job started waiting.
-            self.accept_pending(job.id)
+            if self.config.accept_jobs_automatically:
+                self.accept_pending(job.id)
+            elif job.id not in self.pending_manual:
+                self.pending_manual[job.id] = job
+                self.on_event("job_awaiting_acceptance", {
+                    "job_id": job.id, "label": job.display_label
+                })
             return
         if job.state is RemoteJobState.UPLOADED:
             if self.config.accept_jobs_automatically:
                 self._accept_and_download(job)
             elif job.id not in self.pending_manual:
                 self.client.jobs.set_state(
-                    job.id, RemoteJobState.WAITING_FOR_STATION,
-                    message="waiting for the station operator to accept")
+                    job.id,
+                    RemoteJobState.WAITING_FOR_STATION,
+                    message="waiting for the station operator to accept",
+                )
                 self.pending_manual[job.id] = job
-                self.on_event("job_awaiting_acceptance",
-                             {"job_id": job.id, "label": job.display_label})
+                self.on_event("job_awaiting_acceptance", {
+                    "job_id": job.id, "label": job.display_label
+                })
+            return
 
-    # -- manual acceptance (UI calls these) ----------------------------------
+        if job.state in (
+            RemoteJobState.DOWNLOADING,
+            RemoteJobState.QUEUED,
+            RemoteJobState.RENDERING,
+            RemoteJobState.ENCODED,
+        ):
+            local = self.local_store.get(job.id)
+            if local is None:
+                self._accept_and_download(job)
+            elif local.state is JobState.ENCODED:
+                output = Path(local.output_path) if local.output_path else None
+                if output and output.is_file():
+                    self._upload_result(job.id, output)
+            elif local.state is JobState.COMPLETE:
+                output = Path(local.output_path) if local.output_path else None
+                if output and output.is_file() and job.state not in (
+                    RemoteJobState.READY_FOR_DOWNLOAD,
+                    RemoteJobState.COMPLETE,
+                ):
+                    self._upload_result(job.id, output)
+
     def accept_pending(self, remote_job_id: str) -> None:
         job = self.pending_manual.pop(remote_job_id, None)
         if job is None:
@@ -218,45 +229,60 @@ class RemoteStationWorker:
 
     def reject_pending(self, remote_job_id: str) -> None:
         self.pending_manual.pop(remote_job_id, None)
-        self.client.jobs.set_state(remote_job_id, RemoteJobState.CANCELLED,
-                                   message="rejected by the station operator")
+        self.client.jobs.set_state(
+            remote_job_id,
+            RemoteJobState.CANCELLED,
+            message="rejected by the station operator",
+        )
 
-    # -- download + queue -----------------------------------------------------
     def _accept_and_download(self, job: RemoteJob) -> None:
         self._downloading[job.id] = True
         try:
-            self.client.jobs.claim(job.id)     # -> DOWNLOADING
+            self.client.jobs.claim(job.id)
             entries = self.client.jobs.manifest_entries(job.id)
             if not entries:
                 raise RemoteError("job has no files recorded")
 
             project_root = workspace.project_dir(self.config.workspace, job.id)
             self.client.storage.download_project(
-                job.id, entries, project_root,
-                on_progress=lambda path, done, total: self.client.jobs.add_event(
-                    job.id, "downloading", f"{path} ({done}/{total})")
-                if done == total else None)
-
+                job.id,
+                entries,
+                project_root,
+                on_progress=lambda path, done, total: (
+                    self.client.jobs.add_event(
+                        job.id, "downloading", f"{path} ({done}/{total})"
+                    ) if done == total else None
+                ),
+            )
             workspace.prepare_job_dirs(self.config.workspace, job.id)
             spec = JobSpec(
-                job_id=job.id, name=job.project_name,
-                sequence=job.sequence, preset_source="station",
-                preset_ref=job.preset, output_name=job.output_name,
-                sender_name="remote", file_count=len(entries),
+                job_id=job.id,
+                name=job.project_name,
+                project_relpath=str((job.metadata or {}).get("project_relpath", "")),
+                sequence=job.sequence,
+                preset_source="station",
+                preset_ref=job.preset,
+                output_name=job.output_name,
+                sender_name="remote",
+                file_count=len(entries),
                 total_bytes=sum(e.size for e in entries),
                 delete_after_return=job.delete_after_delivery,
             )
-            record = JobRecord(spec=spec, label=job.display_label,
-                               state=JobState.QUEUED,
-                               message="queued from the cloud")
-            self.local_store.add(record)
-            self.client.jobs.set_state(job.id, RemoteJobState.QUEUED,
-                                       message="queued on the render station")
-            logger.info("%s (%s) downloaded and queued", job.display_label,
-                        job.id[:8])
+            self.local_store.add(JobRecord(
+                spec=spec,
+                label=job.display_label,
+                state=JobState.QUEUED,
+                message="queued from the cloud",
+            ))
+            self.client.jobs.set_state(
+                job.id, RemoteJobState.QUEUED, message="queued on the render station"
+            )
         except (RemoteError, OSError, ValueError, InterruptedError) as exc:
-            self.client.jobs.set_state(job.id, RemoteJobState.FAILED,
-                                       error=friendly_message(exc))
+            message = friendly_message(exc)
+            try:
+                self.client.jobs.set_state(job.id, RemoteJobState.FAILED, error=message)
+            except RemoteError:
+                pass
             logger.error("%s failed during download: %s", job.id[:8], exc)
         finally:
             self._downloading.pop(job.id, None)
@@ -265,16 +291,16 @@ class RemoteStationWorker:
         self.manager.cancel(job.id)
         local = self.local_store.get(job.id)
         if local and not local.state.terminal:
-            self.local_store.update(job.id, state=JobState.CANCELLED,
-                                    message="cancelled by the sender")
+            self.local_store.update(
+                job.id,
+                state=JobState.CANCELLED,
+                message="cancelled by the sender",
+            )
 
-    # -- local render events -> cloud updates --------------------------------
     def _on_local_event(self, kind: str, data: dict) -> None:
         job_id = data.get("job_id", "")
         if not job_id:
             return
-        # A job id that isn't a remote job (e.g. a LAN job sharing the same
-        # local store) simply won't be found here; that's fine, ignore it.
         try:
             remote_job = self.client.jobs.get_job(job_id)
         except RemoteError:
@@ -283,70 +309,34 @@ class RemoteStationWorker:
             return
 
         if kind == "render_started":
-            self.client.jobs.set_state(job_id, RemoteJobState.RENDERING,
-                                       message="rendering")
+            self.client.jobs.set_state(job_id, RemoteJobState.RENDERING, message="rendering")
             self.client.stations.set_busy(self.config.station_id, True)
         elif kind == "render_finished":
             self._upload_result(job_id, Path(data.get("output", "")))
             self.client.stations.set_busy(self.config.station_id, False)
         elif kind == "render_failed":
-            self.client.jobs.set_state(job_id, RemoteJobState.FAILED,
-                                       error=data.get("error", "render failed"))
+            self.client.jobs.set_state(
+                job_id, RemoteJobState.FAILED, error=data.get("error", "render failed")
+            )
             self.client.stations.set_busy(self.config.station_id, False)
 
     def _upload_result(self, job_id: str, output_file: Path) -> None:
         if not output_file.is_file():
             self.client.jobs.set_state(
                 job_id, RemoteJobState.FAILED,
-                error=f"rendered file missing: {output_file}")
+                error=f"rendered file missing: {output_file}",
+            )
             return
         try:
-            self.client.jobs.set_state(job_id, RemoteJobState.ENCODED,
-                                       message="upload starting")
-            self.client.jobs.set_state(job_id, RemoteJobState.UPLOADING_RESULT)
+            self.client.jobs.set_state(job_id, RemoteJobState.UPLOADING_RESULT,
+                                       message="uploading the rendered result")
+            from ..core.manifest import hash_file
             digest = hash_file(output_file)
             self.client.storage.upload_result(job_id, output_file)
-            self.client.jobs.set_output_ready(job_id, output_file.name, digest)
-            # From the local pipeline's point of view this job is done; let the
-            # existing, already-tested retention system manage its lifecycle.
-            self.local_store.update(job_id, state=JobState.COMPLETE,
-                                    message="delivered to the cloud")
-            logger.info("uploaded result for %s -> %s", job_id[:8],
-                        output_file.name)
-        except (RemoteError, OSError) as exc:
-            self.client.jobs.set_state(job_id, RemoteJobState.FAILED, error=friendly_message(exc))
-            logger.error("result upload failed for %s: %s", job_id[:8], exc)
-
-    # -- cleanup once the sender has confirmed delivery ----------------------
-    def _cleanup_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                self._sweep_cleanup()
-            except RemoteError as exc:
-                logger.debug("cleanup sweep failed: %s", exc)
-            self._stop.wait(CLEANUP_POLL_SECONDS)
-
-    def _sweep_cleanup(self) -> None:
-        for job in self.client.jobs.list_jobs():
-            if job.station_id != self.config.station_id:
-                continue
-            if job.state is not RemoteJobState.COMPLETE:
-                continue
-            if self._cloud_cleaned.get(job.id):
-                continue
-            # Cloud storage is temporary transport; once the sender has the
-            # file, remove the cloud copy. The local copy follows the
-            # configured retention policy (or is removed now if the sender
-            # asked for immediate deletion).
-            try:
-                self.client.storage.remove_job_objects(job.id)
-            except RemoteError as exc:
-                logger.debug("cloud cleanup failed for %s: %s", job.id[:8], exc)
-                continue
-            self._cloud_cleaned[job.id] = True
-            local = self.local_store.get(job.id)
-            if local and local.spec.delete_after_return:
-                workspace.remove_job_dir(self.config.workspace, job.id)
-                self.local_store.remove(job.id)
-                logger.info("removed local + cloud data for %s (delete "
-                           "requested)", job.id[:8])
+            self.client.jobs.set_output(job_id, output_file.name, digest)
+            self.client.jobs.set_state(job_id, RemoteJobState.READY_FOR_DOWNLOAD,
+                                       message="render complete; result ready")
+            self.on_event("result_ready", {"job_id": job_id})
+        except RemoteError as exc:
+            self.client.jobs.set_state(job_id, RemoteJobState.FAILED,
+                                       error=friendly_message(exc))
