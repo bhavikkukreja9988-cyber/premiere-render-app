@@ -1,5 +1,12 @@
 {
-  "root_working_tree": "MVP implementation already present on main",
-  "preserved_source": "archive/latest_source",
-  "purpose": "Preserve the supplied later source package without overwriting the fuller MVP implementation."
+  "product": "FileSender",
+  "version": "3.0.1",
+  "architecture": "Remote V3 / Supabase",
+  "production_source": ["src/core", "src/remote", "src/render", "src/ui"],
+  "installer": ["installer/PremiereRenderApp.spec", "installer/FileSender.iss"],
+  "database": "supabase/migrations",
+  "tests": "tests",
+  "documentation": "docs",
+  "assets": "assets/FileSender.ico",
+  "notes": "Only the production source tree is packaged. Legacy LAN code is historical only and is not part of the Remote V3 runtime. Build artifacts, virtual environments, secrets, session files, and Python bytecode are excluded by .gitignore."
 }
