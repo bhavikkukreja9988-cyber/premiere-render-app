@@ -1,11 +1,4 @@
-"""Remote sender worker.
-
-Runs one job end to end over Supabase instead of a direct socket: scan and hash
-the project, create the cloud job, upload, wait for the render station, download
-and verify the result, and confirm delivery. Each phase is a plain database/
-storage call, so a laptop that sleeps mid-render simply reconnects and keeps
-polling — there is no persistent connection to lose.
-"""
+"""Remote sender worker."""
 
 from __future__ import annotations
 
@@ -23,8 +16,8 @@ from .transport import OfflineError, RemoteError, friendly_message
 
 logger = get_logger("remote.sender_service")
 
-POLL_SECONDS = 4.0
-MAX_CONSECUTIVE_ERRORS = 60      # ~4 minutes of retrying a flaky connection
+POLL_SECONDS = 1.0
+MAX_CONSECUTIVE_ERRORS = 60
 
 
 @dataclass
@@ -42,6 +35,7 @@ class RemoteSendRequest:
     folder: Path
     project_name: str
     output_dir: Path
+    project_relpath: str = ""
     sequence: str = ""
     preset: str = ""
     output_name: str = ""
@@ -60,15 +54,17 @@ class RemoteSendWorker(threading.Thread):
         self.on_state = on_state or (lambda kind, data: None)
         self._cancel = threading.Event()
         self.result_path: Optional[Path] = None
-        self.job_id: str = ""
-        self.error: str = ""
+        self.job_id = ""
+        self.error = ""
 
     def cancel(self) -> None:
         self._cancel.set()
         if self.job_id:
             try:
-                self.client.jobs.set_state(self.job_id, RemoteJobState.CANCELLED,
-                                           message="cancelled by the sender")
+                self.client.jobs.set_state(
+                    self.job_id, RemoteJobState.CANCELLED,
+                    message="cancelled by the sender",
+                )
             except RemoteError:
                 pass
 
@@ -77,50 +73,73 @@ class RemoteSendWorker(threading.Thread):
         try:
             self._report("scan", 0.0, "scanning project folder")
             entries = scan_folder(
-                req.folder, ignore=req.ignore, with_hash=True,
+                req.folder,
+                ignore=req.ignore,
+                with_hash=True,
                 progress=lambda path, files, done: self._report(
-                    "scan", 0.0, f"hashing {files} files ({path})"),
-                cancel=self._cancel.is_set)
+                    "scan", 0.0, f"hashing {files} files ({path})"
+                ),
+                cancel=self._cancel.is_set,
+            )
             if not entries:
                 raise RuntimeError("that folder has no files to send")
-            grand_total = total_bytes(entries)
+            total_bytes(entries)
+
+            if not self.client.stations.is_online(req.station_id):
+                raise OfflineError("Render Station is offline")
 
             job = self.client.jobs.create_job(
-                req.station_id, req.project_name, sequence=req.sequence,
-                preset=req.preset, output_name=req.output_name,
-                delete_after_delivery=req.delete_after_delivery)
+                req.station_id,
+                req.project_name,
+                sequence=req.sequence,
+                preset=req.preset,
+                output_name=req.output_name,
+                delete_after_delivery=req.delete_after_delivery,
+                metadata={"project_relpath": req.project_relpath},
+            )
             self.job_id = job.id
             self.on_state("created", {"job_id": job.id, "label": job.display_label})
-
             self.client.jobs.set_state(job.id, RemoteJobState.UPLOADING)
 
             def upload_progress(path: str, done: int, total: int) -> None:
-                self._report("upload", done / total if total else 1.0,
-                             path, done, total)
+                self._report("upload", done / total if total else 1.0, path, done, total)
 
-            self.client.storage.upload_project(job.id, req.folder, entries,
-                                               on_progress=upload_progress,
-                                               cancel=self._cancel.is_set)
+            self.client.storage.upload_project(
+                job.id,
+                req.folder,
+                entries,
+                on_progress=upload_progress,
+                cancel=self._cancel.is_set,
+            )
             for entry in entries:
-                storage_path = (f"user/{self.client.user_id}/jobs/{job.id}/"
-                                f"project/{entry.path}")
-                self.client.jobs.add_file(job.id, entry.path, entry.size,
-                                          entry.sha256, storage_path)
-            self.client.jobs.set_state(job.id, RemoteJobState.UPLOADED,
-                                       message="waiting for the render station")
+                storage_path = (
+                    f"user/{self.client.user_id}/jobs/{job.id}/project/{entry.path}"
+                )
+                self.client.jobs.add_file(
+                    job.id, entry.path, entry.size, entry.sha256, storage_path
+                )
+            self.client.jobs.set_state(
+                job.id,
+                RemoteJobState.UPLOADED,
+                message="waiting for the render station",
+            )
             self.on_state("uploaded", {"job_id": job.id})
 
             final = self._wait_for_result(job.id)
-            if final is None:
-                return
-
             self._report("download", 0.0, "fetching the rendered file")
             dest = self.client.storage.download_result(
-                job.id, final.output_filename, req.output_dir,
+                job.id,
+                final.output_filename,
+                req.output_dir,
                 on_progress=lambda done, total: self._report(
-                    "download", done / total if total else 1.0,
-                    final.output_filename, done, total),
-                cancel=self._cancel.is_set)
+                    "download",
+                    done / total if total else 1.0,
+                    final.output_filename,
+                    done,
+                    total,
+                ),
+                cancel=self._cancel.is_set,
+            )
 
             if final.output_sha256:
                 from ..core.manifest import hash_file
@@ -132,8 +151,6 @@ class RemoteSendWorker(threading.Thread):
             self.result_path = dest
             self._report("done", 1.0, f"saved {dest.name}")
             self.on_state("complete", {"job_id": job.id, "path": str(dest)})
-            logger.info("remote job %s complete -> %s", job.id[:8], dest)
-
         except InterruptedError:
             self.error = "cancelled"
             self.on_state("cancelled", {"job_id": self.job_id})
@@ -142,19 +159,18 @@ class RemoteSendWorker(threading.Thread):
             self.error = message
             if self.job_id:
                 try:
-                    self.client.jobs.set_state(self.job_id, RemoteJobState.FAILED,
-                                               error=message)
+                    self.client.jobs.set_state(self.job_id, RemoteJobState.FAILED, error=message)
                 except RemoteError:
                     pass
             self.on_state("failed", {"job_id": self.job_id, "error": message})
             logger.error("remote job %s failed: %s", self.job_id[:8] or "?", exc)
-        except Exception as exc:                              # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             message = friendly_message(exc)
             self.error = message
             self.on_state("failed", {"job_id": self.job_id, "error": message})
             logger.exception("remote send worker crashed")
 
-    def _wait_for_result(self, job_id: str) -> Optional[RemoteJob]:
+    def _wait_for_result(self, job_id: str) -> RemoteJob:
         consecutive_errors = 0
         while not self._cancel.is_set():
             try:
@@ -165,7 +181,8 @@ class RemoteSendWorker(threading.Thread):
                 self._report("wait", 0.0, f"reconnecting… ({friendly_message(exc)})")
                 if consecutive_errors > MAX_CONSECUTIVE_ERRORS:
                     raise RuntimeError(
-                        f"Lost contact with the server: {friendly_message(exc)}")
+                        f"Lost contact with the server: {friendly_message(exc)}"
+                    )
                 time.sleep(POLL_SECONDS)
                 continue
 
@@ -180,8 +197,7 @@ class RemoteSendWorker(threading.Thread):
 
             label = {
                 RemoteJobState.UPLOADED: "waiting for the render station",
-                RemoteJobState.WAITING_FOR_STATION: "waiting for the station "
-                                                    "operator to accept",
+                RemoteJobState.WAITING_FOR_STATION: "waiting for the station operator to accept",
                 RemoteJobState.DOWNLOADING: "render station is downloading",
                 RemoteJobState.QUEUED: "queued for rendering",
                 RemoteJobState.RENDERING: "rendering",
