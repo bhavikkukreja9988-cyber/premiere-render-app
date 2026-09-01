@@ -1,22 +1,67 @@
-# AI Developer Handoff
+# FileSender Remote V3 — Developer Handoff
 
-This repository has two supplied project states. The root working tree remains the fuller MVP implementation already present in the repository. The later source package is preserved under `archive/latest_source/` for comparison and recovery.
+This branch contains the current Remote V3 production tree for FileSender.
 
-## Important development rules
+## Product architecture
 
-1. Inspect the existing source before changing it.
-2. Do NOT replace `src/`, `tests/`, or `scripts/` wholesale.
-3. Prefer small, incremental patches.
-4. Preserve working functionality unless a change is required and documented.
-5. Run the existing tests before and after changes.
-6. Keep Windows/Premiere Pro/Media Encoder behavior compatible with the existing architecture.
-7. Before deleting or renaming files, explain the reason and identify affected imports/tests.
-8. Record every modified, added, or deleted file in the development summary.
+- Sender and Render Station can be on different networks and locations.
+- Supabase is the production transport/control plane.
+- Rendering happens locally on the Render Station with Adobe Media Encoder.
+- The app is online only while FileSender is open; closing it stops the station worker/heartbeat.
 
-## Current engineering goal
+## User-facing rules
 
-Build a reliable workflow for:
+Sender:
+- Username + password only.
+- No email, pairing code, IP address, or port entry.
+- Render Stations are selected by name and cloud status.
+- SEND is disabled when the selected station is offline.
+- Busy stations can receive jobs and queue them.
+- `.prproj` files and Premiere project folders can be dragged in.
+- The same project can be sent repeatedly; each send is a new job.
+- The original project is never modified or permanently duplicated.
 
-ZIP/project reception -> extraction/validation -> Premiere project detection -> Adobe Media Encoder/Premiere automation -> render completion detection -> output verification -> completed/failed job handling.
+Render Station:
+- Opening FileSender makes the station online automatically.
+- Closing FileSender makes it offline.
+- No Go Online / Go Offline controls.
+- No pairing-code UI.
+- Local project storage and retention are configurable.
+- `Accept incoming jobs automatically` controls automatic job acceptance.
 
-Do not claim Media Encoder automation is complete until it has been tested on the actual Windows machine with the installed Adobe versions.
+## Production source boundaries
+
+```text
+src/core/      pure application logic
+src/remote/    Supabase auth, station, job, storage and transfer logic
+src/render/    Adobe Media Encoder integration
+src/ui/        PySide6 UI
+supabase/      reproducible database/RLS/realtime/storage migrations
+tests/         active production tests
+installer/     PyInstaller + Inno Setup
+assets/        FileSender branding
+```
+
+Legacy LAN source is not part of the production runtime. Do not restore direct TCP, UDP discovery, pairing, or manual IP/port controls.
+
+## Current validation status
+
+The latest AI checkpoint reported 103 automated tests passing. The repository maintainer also verified that the active Python source compiles with `python -m compileall -q src tests scripts`.
+
+That does NOT prove:
+
+- live Supabase authentication/RLS
+- real Storage transfer
+- two-network operation
+- Windows/PySide6 UI behavior
+- real Premiere Pro / Media Encoder automation
+- final installer install/uninstall
+
+Those remain release-gate tests.
+
+## Handoff rule
+
+The Other AI writes code and provides complete ZIPs/change reports.
+The repository maintainer uploads/organizes GitHub and handles merges.
+
+Do not claim GitHub or live-service testing unless it actually happened.
