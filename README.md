@@ -21,7 +21,7 @@ The Sender never needs the station's IP address, port, pairing code, or a manual
 ### Render Station
 
 1. Install FileSender on the PC that has Premiere Pro / Adobe Media Encoder.
-2. Sign in once with the family username and password.
+2. Sign in with the family username and password.
 3. Enable the Render Station role.
 4. Choose the local project-storage location.
 5. Optionally enable **Accept incoming jobs automatically**.
@@ -70,7 +70,7 @@ Supabase Storage
 Sender downloads and verifies result
 ```
 
-The old V2 LAN implementation is kept only as historical reference under the Git history/archive and is not part of the Remote V3 production path.
+The old V2 LAN implementation is historical reference only and is not part of the Remote V3 production path.
 
 ## Repository layout
 
@@ -91,7 +91,6 @@ tests/               automated core + remote tests
 scripts/             Windows build and preflight scripts
 installer/           PyInstaller + Inno Setup configuration
 docs/                architecture, setup, build, health, and release docs
-archive/              legacy/reference material only
 ```
 
 ## Build the Windows installer
