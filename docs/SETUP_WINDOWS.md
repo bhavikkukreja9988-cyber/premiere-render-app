@@ -1,80 +1,133 @@
-# Windows setup and troubleshooting
+# Windows setup
 
-## Render station PC
+FileSender connects a Sender PC and a Render Station PC over the internet
+through Supabase — they do not need to be on the same network, and there is
+nothing to configure about IP addresses, ports, or pairing codes. This page
+covers the one-time setup on each PC.
 
-1. **Install the app** (or run from source) and open the **Render station** tab.
-2. **Set the workspace** to a drive with room for incoming projects — a job
-   needs roughly 1.5× the project folder size.
-3. **Install the Media Encoder agent.** Click the button; it writes
-   `PremiereRenderAgent.jsx` into
-   `%APPDATA%\Adobe\Startup Scripts CC\Adobe Media Encoder\`.
-4. **Restart Adobe Media Encoder** so it loads the agent at startup.
-5. **Allow scripting** in Media Encoder:
-   *Edit → Preferences → General → Allow Scripts to Write Files and Access Network.*
-6. **Open the firewall** once, from an elevated PowerShell:
+## Both PCs
 
-   ```powershell
-   New-NetFirewallRule -DisplayName "Premiere Render App (TCP)" `
-     -Direction Inbound -Protocol TCP -LocalPort 49872 -Action Allow -Profile Private
-   New-NetFirewallRule -DisplayName "Premiere Render App (discovery)" `
-     -Direction Inbound -Protocol UDP -LocalPort 49873 -Action Allow -Profile Private
-   ```
+1. Install FileSender (`FileSender.exe`) and launch it.
+2. On first launch, sign in with a username and password. Everyone who
+   should share render stations signs in with the same username and password —
+   this is the simple shared family-account workflow.
+3. During first-run setup, choose how this PC will be used: **Sender**,
+   **Render Station**, or both. You can change this later in Settings.
 
-7. Click **Go online** and note the IP address and 6-digit pairing code.
+No firewall rule is needed on either PC. FileSender only makes normal
+outbound HTTPS connections to Supabase; nothing needs to accept an inbound
+connection.
 
-Verify the setup at any time:
+## Render Station PC
+
+If you chose Render Station (or both), configure:
+
+- **Station name** — the name shown to Senders.
+- **Project storage location** — where received Premiere projects and media
+  are stored while they render. Use a drive with enough free space for the
+  projects you expect to receive.
+- **Accept incoming jobs automatically** — on by default. Turn it off when
+  you want an operator to approve each job with Accept/Reject.
+- **Delete completed projects after** — optional cleanup for completed local
+  received-project data. It never deletes the Sender's original project.
+- **Adobe Media Encoder** — FileSender detects the installed encoder and
+  installs its scripting agent automatically when the station starts.
+
+### One Adobe setting is required
+
+Open **Adobe Media Encoder** and enable:
+
+**Edit → Preferences → General → Allow Scripts to Write Files and Access Network**
+
+This Adobe setting must be enabled by the user; FileSender cannot safely
+change it for you.
+
+Opening FileSender puts the Render Station online automatically. Closing
+FileSender stops the station worker/heartbeat and makes it offline. There is
+no **Go Online**, **Go Offline**, IP, port, or pairing-code workflow.
+
+## Sender PC
+
+The Sender needs only the installed FileSender application and an internet
+connection. It does not need Python, Git, Premiere Pro, Media Encoder, or
+any developer tools.
+
+After signing in:
+
+1. Render Stations appear by name with **Online / Busy / Offline** status.
+2. Select a station. An offline station cannot receive a new job and the
+   **SEND** button is disabled.
+3. Drag a `.prproj` file or Premiere project folder into the drop area, or use
+   Browse.
+4. Choose the sequence/preset/output settings.
+5. Click **SEND**.
+
+Busy stations remain sendable because jobs can queue. The same Premiere
+project may be sent repeatedly; every send creates a new Job.
+
+## Project files and external media
+
+FileSender sends a project folder and validates/hash-checks the files that
+are included. If the Premiere project references media outside the folder,
+resolve that before sending (for example, collect/consolidate the project's
+media in Premiere). The Sender should warn when it can detect external
+references.
+
+The Sender's original project is not modified, moved, or permanently
+duplicated by FileSender.
+
+## Troubleshooting
+
+**No stations appear.**
+
+Make sure the Render Station PC has FileSender open, is signed into the same
+family account, and has the Render Station role enabled. It may take up to
+the configured heartbeat timeout for status to update.
+
+**Station says Offline while FileSender is open.**
+
+Check that the Render Station has internet access and that FileSender can
+reach Supabase. The station status is based on its heartbeat, not its local
+IP address.
+
+**SEND is disabled.**
+
+Read the message below the button. Common reasons are: not signed in, no
+project selected, project validation still running, or the selected station
+is Offline.
+
+**Jobs remain queued.**
+
+Check **Settings → Render station → Render engine**. If Adobe Media Encoder
+is unavailable, FileSender will show that instead of silently pretending that
+automatic rendering is working. Make sure Media Encoder is installed and
+that **Allow Scripts to Write Files and Access Network** is enabled.
+
+**Media Encoder renders the wrong sequence.**
+
+Make sure the selected sequence name matches the project exactly. Leaving
+the sequence blank lets the render pipeline use the project's default
+sequence where supported.
+
+**The result does not return immediately.**
+
+The Sender can be closed while the Render Station continues processing the
+cloud job. Reopen FileSender later and it will resume status polling and
+result download when the MP4 is ready.
+
+**Manual render fallback.**
+
+If automatic Adobe Media Encoder automation is genuinely unavailable, the
+Render Station exposes the manual fallback state. The job remains recoverable
+until a valid rendered output is provided, after which FileSender can return
+it to the Sender.
+
+## Developer-only check
+
+From a source checkout, the local diagnostic command is:
 
 ```powershell
 python -m src.main --check
 ```
 
-## Editing PC
-
-Nothing to install beyond the app. Pick the station from the list, enter the
-pairing code, choose the project folder, send.
-
-## Background rendering
-
-The render runs without interrupting whoever is using the render PC. Media
-Encoder is launched minimised, at below-normal priority, and never takes focus,
-and the agent starts each batch automatically. You can keep working; renders
-proceed behind your other windows. If you would rather watch, just un-minimise
-Media Encoder from the taskbar — that does not affect the job.
-
-## Troubleshooting
-
-**No stations appear in the list.**
-Broadcast is blocked (common on VPNs and guest networks). Type the station's IP
-and port directly — everything else works normally.
-
-**"Connection refused".**
-The station app is closed, it is not online, or the firewall rule is missing.
-The station must have the app open with **Go online** active.
-
-**"wrong pairing code".**
-The code changes when regenerated. Read it off the station's screen.
-
-**Jobs stay queued and never render.**
-Check the station's Media Encoder box. If it says *not reporting*: Media Encoder
-is closed, the agent is not installed, or scripting is not allowed in
-Preferences. The agent's own log is at
-`%APPDATA%\PremiereRenderApp\ame\agent.log`.
-
-**Media Encoder opens the project but renders the wrong sequence.**
-The sequence name must match exactly, including case and trailing spaces. Leave
-it blank to let Media Encoder use the project's default.
-
-**Media offline in Media Encoder.**
-The project references media outside the folder you sent. Use *File → Collect
-Files* (or consolidate) in Premiere so everything lives under one folder, then
-send that folder.
-
-**The render finishes but nothing comes back.**
-The sender must stay open — it polls, then downloads. If it was closed, reopen
-it; the job stays on the station and the file is in the job's `output/` folder.
-
-**Manual fallback.**
-If the station shows the *Manual* backend, it will queue jobs and wait for a
-file to appear in `<workspace>\jobs\<job_id>\output\`. Render it yourself in
-Premiere or Media Encoder, drop the file there, and the return transfer happens
-automatically.
+Normal installed users do not need Python to use FileSender.
