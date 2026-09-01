@@ -1,80 +1,105 @@
-# Remote V3 Transport
+# PRAP/2 — wire protocol
 
-Remote V3 does not use the old LAN wire protocol as the primary transport.
+Protocol version: `2`. Default TCP port `49872`, discovery UDP port `49873`.
 
-Sender and Render Station communicate through Supabase over HTTPS/Realtime and private Storage. They can be on different networks and in different locations.
+## Framing
 
-## Control plane
-
-Supabase Database stores:
-
-- users / authenticated sessions
-- stations
-- station online state / last_seen
-- jobs
-- job files / hashes
-- job events
-
-Supabase Realtime provides live updates for station presence and job status where available.
-
-## File plane
-
-Large project files and returned MP4s use private Supabase Storage with resumable/chunked transfer.
-
-Conceptual paths:
-
-```text
-project-files/user/{user_id}/jobs/{job_id}/project/...
-render-results/user/{user_id}/jobs/{job_id}/output/...
+```
+[4 bytes big-endian header length][UTF-8 JSON header][raw payload bytes]
 ```
 
-Do not route multi-gigabyte files through an Edge Function.
+Header shape:
 
-## Job flow
-
-```text
-Sender authenticates
-  -> verify selected station is online
-  -> create a new Job ID
-  -> upload project files
-  -> mark job UPLOADED
-  -> Render Station receives job
-  -> download project
-  -> queue/render locally
-  -> upload and checksum MP4
-  -> mark READY_FOR_DOWNLOAD
-  -> Sender downloads and verifies MP4
-  -> mark COMPLETE
-  -> safely clean temporary cloud files
+```json
+{"t": "file_chunk", "p": {"path": "footage/a.mov"}, "n": 1048576}
 ```
 
-The exact internal API calls may change; the job state transitions are the important contract.
+`n` is the payload length in bytes and is `0` for control messages. Binary data
+is never base64-encoded, so a 200 GB folder costs no encoding overhead.
 
-## Offline behavior
+Limits: header ≤ 1 MiB, payload ≤ 16 MiB, default chunk 1 MiB.
 
-If a station is offline before Send begins, the Sender must not start the transfer.
+## Session
 
-If connectivity is lost after job creation, keep the job recoverable. Resume when connectivity returns.
+The sender opens every connection. Phases are independent connections, so a
+station reboot mid-render only costs a retry.
 
-If the Render Station is offline, it must not be considered available merely because its last known IP is reachable locally.
+```
+sender                          station
+  |  hello {protocol, sender_name} ->
+  |  <- hello_ok {name, port, busy, queue_length, requires_code, nonce, free_bytes, backend}
+  |  auth {token = HMAC-SHA256(pairing_code, nonce)} ->
+  |  <- auth_ok
+```
 
-## Authentication
+The pairing code itself never crosses the wire.
 
-The user-facing login is only username + password.
+### Submitting
 
-The implementation may map the username to a synthetic email for Supabase Auth, but that value is internal and never shown to users.
+```
+  |  job_offer {spec, manifest[{path, size, mtime, sha256}]} ->
+  |  <- job_accept {job_id, need: {path: offset}, chunk_size}
+  |  file_begin {path, offset, size} ->
+  |  file_chunk [payload] ->        (repeated)
+  |  file_end {path, sha256} ->
+  |  <- file_ok {path}
+  |  transfer_done {job_id} ->
+  |  <- job_queued {job_id, queue_length}
+```
 
-Never send or store Supabase secret/service-role credentials in the desktop client.
+`need` is the resume map: files already present with a matching hash are
+omitted, partial files carry the byte offset to continue from.
 
-## Security contract
+### Waiting and collecting
 
-- All remote traffic uses HTTPS/TLS and Supabase authenticated access.
-- Storage buckets remain private.
-- RLS limits rows/files to authorized users/stations/jobs.
-- Every received file is checked against its expected SHA-256.
-- Paths are validated before writing to the local workspace.
-- The legacy LAN TCP/UDP protocol must not be exposed to the public internet.
+```
+  |  status_req {job_id} ->     |  <- status {spec, state, progress, message, error, ...}
+  |  result_fetch {job_id, offset} ->
+  |  <- result_begin {filename, size, sha256}
+  |  <- result_chunk [payload]  (repeated)
+  |  <- result_end {job_id, size}
+  |  result_ack {job_id, delete_remote} ->
+  |  <- status {…state: complete}
+  |  bye ->
+```
 
-## Legacy protocol
+`cancel {job_id}` is answered with `cancel_ok`. `ping` is answered with `pong`.
+`presets_req` returns the station's Media Encoder preset names.
 
-The previous PRAP/2 TCP/UDP protocol is retained in the repository only as migration/reference material. Its pairing-code, LAN discovery, and direct-socket behavior are not part of the Remote V3 product contract.
+## Errors
+
+Any message may be answered with:
+
+```json
+{"t": "error", "p": {"code": "unsafe_manifest", "message": "parent traversal rejected"}}
+```
+
+Codes: `protocol_mismatch`, `auth_failed`, `bad_offer`, `unsafe_manifest`,
+`unsafe_path`, `insufficient_space`, `checksum_mismatch`, `verify_failed`,
+`no_job`, `no_file`, `unknown_job`, `no_result`, `unknown_message`,
+`protocol_error`, `internal_error`.
+
+The receiving client raises `RemoteError` carrying the code.
+
+## Discovery
+
+The station broadcasts to `255.255.255.255:49873` every 2 seconds:
+
+```json
+{"magic": "premiere-render-app", "protocol": 2, "name": "RENDER-01",
+ "port": 49872, "busy": false, "queue_length": 0, "requires_code": true,
+ "free_bytes": 812000000000, "backend": "Adobe Media Encoder"}
+```
+
+Senders drop stations not heard from for 8 seconds. Broadcast is a convenience
+only — a typed IP address bypasses it entirely.
+
+## Security model
+
+- Pairing code + nonce HMAC gates every operation after `hello`.
+- Manifest paths are rejected if absolute, drive-qualified, UNC, containing
+  `..`, using NT reserved device names, or holding characters Windows cannot
+  store. Each write is re-checked with `safe_join` against the job root.
+- Free-space is checked before accepting an offer.
+- This is a LAN trust model: traffic is not encrypted. Do not expose port 49872
+  to the internet.

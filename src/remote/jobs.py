@@ -115,6 +115,28 @@ class RemoteJobService:
         rows = self.transport.select("jobs", {"id": job_id})
         return RemoteJob.from_row(rows[0]) if rows else None
 
+    def queue_position(self, job_id: str) -> int:
+        """Roughly how many jobs are ahead of this one on its station.
+
+        Counts other jobs on the same station that are queued or rendering
+        and were created earlier. This is an estimate for the UI ("2 jobs
+        ahead of you"), not a guaranteed exact position — the station
+        processes its local queue independently.
+        """
+        job = self.get_job(job_id)
+        if job is None or not job.station_id:
+            return 0
+        ahead = 0
+        for row in self.transport.select("jobs", {"station_id": job.station_id}):
+            other = RemoteJob.from_row(row)
+            if other.id == job.id:
+                continue
+            if other.state not in (RemoteJobState.QUEUED, RemoteJobState.RENDERING):
+                continue
+            if other.created_at < job.created_at:
+                ahead += 1
+        return ahead
+
     def list_jobs(self) -> List[RemoteJob]:
         rows = self.transport.select("jobs", order_by="created_at",
                                      descending=True)

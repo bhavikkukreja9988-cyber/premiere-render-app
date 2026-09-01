@@ -52,6 +52,11 @@ class DropArea(QLabel):
 
     files_dropped = Signal(list)
 
+    _BASE_STYLE = ("QLabel { border: 2px dashed #444a5a; border-radius: 10px; "
+                   "padding: 18px; }")
+    _HOVER_STYLE = ("QLabel { border: 2px dashed #4d7cfe; border-radius: 10px; "
+                    "padding: 18px; background: rgba(77, 124, 254, 0.08); }")
+
     def __init__(self) -> None:
         super().__init__()
         self.setAlignment(Qt.AlignCenter)
@@ -59,9 +64,7 @@ class DropArea(QLabel):
         self.setAcceptDrops(True)
         self.setWordWrap(True)
         self._reset_text()
-        self.setStyleSheet(
-            "QLabel { border: 2px dashed #444a5a; border-radius: 10px; "
-            "padding: 18px; }")
+        self.setStyleSheet(self._BASE_STYLE)
 
     def _reset_text(self) -> None:
         self.setText(
@@ -73,9 +76,14 @@ class DropArea(QLabel):
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
+            self.setStyleSheet(self._HOVER_STYLE)
             event.acceptProposedAction()
 
+    def dragLeaveEvent(self, event) -> None:
+        self.setStyleSheet(self._BASE_STYLE)
+
     def dropEvent(self, event: QDropEvent) -> None:
+        self.setStyleSheet(self._BASE_STYLE)
         mime: QMimeData = event.mimeData()
         paths = [Path(url.toLocalFile()) for url in mime.urls() if url.isLocalFile()]
         if paths:
@@ -238,8 +246,7 @@ class RemoteSenderPanel(QWidget):
         self.station_combo.blockSignals(True)
         self.station_combo.clear()
         for station in stations:
-            online = station.is_online(self.client.config.station_offline_after)
-            marker = "● Online" if online else "● Offline"
+            marker = self._status_marker_plain(station)
             self.station_combo.addItem(f"{station.name}  {marker}", station.id)
         self.station_combo.blockSignals(False)
 
@@ -258,14 +265,27 @@ class RemoteSenderPanel(QWidget):
             self.station_combo.setCurrentIndex(index)
         self._refresh_station_status_only(stations)
 
+    def _status_marker_plain(self, station: Station) -> str:
+        """Plain-text 'Online' / 'Busy' / 'Offline' for the dropdown list."""
+        if not station.is_online(self.client.config.station_offline_after):
+            return "● Offline"
+        if station.status == "busy":
+            return "● Busy"
+        return "● Online"
+
     def _refresh_station_status_only(self, stations: List[Station]) -> None:
         station = self._selected_station()
         if station is None:
-            self.station_status.setText("No render stations found.")
+            self.station_status.setText(
+                "No render stations yet. Open this app on another PC and set "
+                "it up as a Render Station — it'll appear here automatically.")
             return
-        online = station.is_online(self.client.config.station_offline_after)
-        colour = OK if online else BAD
-        state = "Online" if online else "Offline"
+        if not station.is_online(self.client.config.station_offline_after):
+            colour, state = BAD, "Offline"
+        elif station.status == "busy":
+            colour, state = WARN, "Busy — rendering another job"
+        else:
+            colour, state = OK, "Online"
         self.station_status.setText(f"<span style='color:{colour}'>● {state}</span>")
         presets = list((station.capabilities or {}).get("presets") or [])
         current = self.preset_combo.currentText()
@@ -406,7 +426,13 @@ class RemoteSenderPanel(QWidget):
         self.phase_label.setText("Starting…")
 
     def _cancel_send(self) -> None:
-        if self.worker:
+        if not self.worker:
+            return
+        answer = QMessageBox.question(
+            self, "Cancel send?",
+            "Cancel this send? Anything already uploaded will be discarded.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer == QMessageBox.Yes:
             self.worker.cancel()
             self.detail_label.setText("Cancelling…")
 

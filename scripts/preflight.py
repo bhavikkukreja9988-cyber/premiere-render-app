@@ -121,6 +121,17 @@ def check_spec_present() -> bool:
                 f"Expected: {spec}\n          {iss}")
 
 
+def check_icon_present() -> bool:
+    icon = REPO_ROOT / "assets" / "FileSender.ico"
+    if icon.is_file():
+        return line(GREEN, "App icon is present")
+    return line(
+        RED, "App icon is missing",
+        f"Expected at: {icon}\n"
+        "The Inno Setup build step will fail without it. Re-extract the "
+        "project or restore assets/FileSender.ico.")
+
+
 def main() -> int:
     print("=" * 64)
     print(" Premiere Render App - build environment check")
@@ -135,6 +146,7 @@ def main() -> int:
         check_inno(),
         check_agent_present(),
         check_spec_present(),
+        check_icon_present(),
     ]
     print("-" * 64)
     if all(checks):

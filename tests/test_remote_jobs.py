@@ -82,6 +82,36 @@ class TestRemoteJobs(unittest.TestCase):
         job = self.jobs.create_job("RS-1", "MyVideo")
         self.assertTrue(any(jid == job.id for _, jid in seen))
 
+    def test_queue_position_counts_earlier_active_jobs_on_the_same_station(self):
+        a = self.jobs.create_job("RS-1", "A")
+        b = self.jobs.create_job("RS-1", "B")
+        c = self.jobs.create_job("RS-1", "C")
+        self.jobs.set_state(a.id, RemoteJobState.QUEUED)
+        self.jobs.set_state(b.id, RemoteJobState.RENDERING)
+        self.jobs.set_state(c.id, RemoteJobState.QUEUED)
+        # c was created after both a and b, so both count as ahead of it.
+        self.assertEqual(self.jobs.queue_position(c.id), 2)
+        # a was created before b and c, so nothing counts as ahead of it.
+        self.assertEqual(self.jobs.queue_position(a.id), 0)
+
+    def test_queue_position_ignores_jobs_not_actively_queued_or_rendering(self):
+        a = self.jobs.create_job("RS-1", "A")
+        b = self.jobs.create_job("RS-1", "B")
+        self.jobs.set_state(a.id, RemoteJobState.COMPLETE)
+        self.jobs.set_state(b.id, RemoteJobState.QUEUED)
+        self.assertEqual(self.jobs.queue_position(b.id), 0)
+
+    def test_queue_position_ignores_other_stations(self):
+        self.stations.register("RS-2", "Other PC", "2.0.0")
+        a = self.jobs.create_job("RS-1", "A")
+        b = self.jobs.create_job("RS-2", "B")
+        self.jobs.set_state(a.id, RemoteJobState.QUEUED)
+        self.jobs.set_state(b.id, RemoteJobState.QUEUED)
+        self.assertEqual(self.jobs.queue_position(b.id), 0)
+
+    def test_queue_position_of_unknown_job_is_zero(self):
+        self.assertEqual(self.jobs.queue_position("does-not-exist"), 0)
+
 
 class TestSendGate(unittest.TestCase):
     def setUp(self):

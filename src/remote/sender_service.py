@@ -188,6 +188,13 @@ class RemoteSendWorker(threading.Thread):
                 RemoteJobState.ENCODED: "finishing up",
                 RemoteJobState.UPLOADING_RESULT: "uploading the result",
             }.get(job.state, job.state.value)
+            if job.state is RemoteJobState.QUEUED:
+                try:
+                    ahead = self.client.jobs.queue_position(job_id)
+                except RemoteError:
+                    ahead = 0
+                if ahead > 0:
+                    label = f"queued — {ahead} job{'s' if ahead != 1 else ''} ahead of you"
             self._report("render", 0.0, label)
             time.sleep(POLL_SECONDS)
         raise InterruptedError("cancelled")

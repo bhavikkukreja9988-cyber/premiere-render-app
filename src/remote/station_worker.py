@@ -60,6 +60,19 @@ class RemoteStationWorker:
             workspace.jobs_file(config.workspace),
             jobs_root=config.workspace / "jobs",
         )
+        if backend is None:
+            # build_backend() below only picks Media Encoder if the agent is
+            # ALREADY installed at this exact moment — otherwise it silently
+            # falls back to manual rendering for the rest of this session,
+            # even on a PC with Media Encoder fully installed. Make sure the
+            # agent is in place first so a station that's never opened the
+            # legacy tab still gets automated rendering on its very first run.
+            try:
+                from ..render import media_encoder as ame
+                ame.install_agent()
+            except Exception as exc:                        # noqa: BLE001
+                logger.warning("could not pre-install the Media Encoder "
+                               "agent: %s", exc)
         self.backend = backend or build_backend(config)
         self.manager = RenderManager(self.local_store, self.backend, config,
                                      self._on_local_event)

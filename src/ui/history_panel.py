@@ -150,6 +150,15 @@ class CloudHistoryTable(QWidget):
             return
         self.hint.setText(
             "Every job on this account, from any Sender or Render Station.")
+
+        # Show "Bhavik Render PC", not "RS-a1b2c3d4" — falls back to the raw
+        # ID if a station can't be resolved (e.g. it no longer exists).
+        try:
+            station_names = {s.id: s.name for s in
+                             self._client.stations.list_stations()}
+        except Exception:                                    # noqa: BLE001
+            station_names = {}
+
         selected = self.table.currentRow()
         self.table.setRowCount(len(jobs))
         for row, job in enumerate(jobs):
@@ -158,10 +167,11 @@ class CloudHistoryTable(QWidget):
             error_item = QTableWidgetItem(job.error)
             if job.error:
                 error_item.setForeground(QColor(state_colour("failed")))
+            station_label = station_names.get(job.station_id, job.station_id or "—")
             values = [
                 QTableWidgetItem(job.display_label),
                 QTableWidgetItem(job.project_name or "—"),
-                QTableWidgetItem(job.station_id or "—"),
+                QTableWidgetItem(station_label),
                 status,
                 QTableWidgetItem(_fmt_time(job.created_at)),
                 QTableWidgetItem(_fmt_time(job.completed_at)),
