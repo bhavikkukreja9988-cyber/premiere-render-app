@@ -147,8 +147,7 @@ class RemoteStationWorker:
         try:
             from ..render import media_encoder as ame
             return [name for name, _ in ame.list_presets()]
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("could not read Media Encoder presets: %s", exc)
+        except Exception:  # noqa: BLE001
             return []
 
     def _reconcile_local_results(self) -> None:
@@ -344,9 +343,14 @@ class RemoteStationWorker:
             from ..core.manifest import hash_file
             digest = hash_file(output_file)
             self.client.storage.upload_result(job_id, output_file)
-            self.client.jobs.set_output(job_id, output_file.name, digest)
+            self.client.jobs.set_output_ready(job_id, output_file.name, digest)
             self.client.jobs.set_state(job_id, RemoteJobState.READY_FOR_DOWNLOAD,
                                        message="render complete; result ready")
+            # Hand off to the existing, already-tested local retention system:
+            # from here on, this job's local data is managed by the
+            # configured retention policy, same as it always was.
+            self.local_store.update(job_id, state=JobState.COMPLETE,
+                                    message="delivered to the cloud")
             self.on_event("result_ready", {"job_id": job_id})
         except RemoteError as exc:
             self.client.jobs.set_state(job_id, RemoteJobState.FAILED,
