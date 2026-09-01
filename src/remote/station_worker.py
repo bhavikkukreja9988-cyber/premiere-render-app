@@ -25,6 +25,7 @@ from .transport import RemoteError, friendly_message
 logger = get_logger("remote.station_worker")
 
 RECOVERY_POLL_SECONDS = 20.0
+CLEANUP_POLL_SECONDS = 30.0
 
 
 class RemoteStationWorker:
@@ -66,8 +67,10 @@ class RemoteStationWorker:
 
         self._stop = threading.Event()
         self._recovery_thread: Optional[threading.Thread] = None
+        self._cleanup_thread: Optional[threading.Thread] = None
         self._unsubscribe = None
         self._downloading: Dict[str, bool] = {}
+        self._cloud_cleaned: Dict[str, bool] = {}
         self.pending_manual: Dict[str, RemoteJob] = {}
         self.started = False
 
@@ -98,6 +101,10 @@ class RemoteStationWorker:
             target=self._recovery_loop, name="remote-station-recovery", daemon=True
         )
         self._recovery_thread.start()
+        self._cleanup_thread = threading.Thread(
+            target=self._cleanup_loop, name="remote-station-cleanup", daemon=True
+        )
+        self._cleanup_thread.start()
         self.started = True
         logger.info("remote station %s online", self.config.station_id)
         self.on_event("remote_station_online", {"station_id": self.config.station_id})
@@ -116,6 +123,9 @@ class RemoteStationWorker:
         if self._recovery_thread:
             self._recovery_thread.join(timeout=2.0)
             self._recovery_thread = None
+        if self._cleanup_thread:
+            self._cleanup_thread.join(timeout=2.0)
+            self._cleanup_thread = None
         self.retention.stop()
         self.manager.stop()
         try:
@@ -340,3 +350,37 @@ class RemoteStationWorker:
         except RemoteError as exc:
             self.client.jobs.set_state(job_id, RemoteJobState.FAILED,
                                        error=friendly_message(exc))
+
+    # -- cleanup once the sender has confirmed delivery ----------------------
+    def _cleanup_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._sweep_cleanup()
+            except RemoteError as exc:
+                logger.debug("cleanup sweep failed: %s", exc)
+            self._stop.wait(CLEANUP_POLL_SECONDS)
+
+    def _sweep_cleanup(self) -> None:
+        """Cloud storage is temporary transport, not permanent storage: once
+        a job is fully delivered, remove its cloud files. The local copy
+        follows the configured retention policy — or is removed immediately
+        if the sender asked for that when the job was sent."""
+        for job in self.client.jobs.list_jobs():
+            if job.station_id != self.config.station_id:
+                continue
+            if job.state is not RemoteJobState.COMPLETE:
+                continue
+            if self._cloud_cleaned.get(job.id):
+                continue
+            try:
+                self.client.storage.remove_job_objects(job.id)
+            except RemoteError as exc:
+                logger.debug("cloud cleanup failed for %s", job.id[:8], exc)
+                continue
+            self._cloud_cleaned[job.id] = True
+            local = self.local_store.get(job.id)
+            if local and local.spec.delete_after_return:
+                workspace.remove_job_dir(self.config.workspace, job.id)
+                self.local_store.remove(job.id)
+                logger.info("removed local + cloud data for %s (delete "
+                           "requested)", job.id[:8])
