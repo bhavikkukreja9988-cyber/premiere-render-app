@@ -5,7 +5,9 @@ from __future__ import annotations
 import sys
 
 from .core.config import AppConfig, load_config
-from .core.log import logger, setup_logging
+from .core.log import get_logger, setup_logging
+
+logger = get_logger("app")
 
 
 class PremiereRenderApp:
@@ -28,6 +30,7 @@ class PremiereRenderApp:
 
         from .ui.main_window import MainWindow
 
+        logger.info("starting FileSender desktop app")
         app = QApplication.instance() or QApplication(sys.argv)
         app.setApplicationName("FileSender")
         app.setApplicationDisplayName("FileSender")
