@@ -1,116 +1,274 @@
-# AI Developer Guide
+# AI Developer Guide — FileSender Remote V3
 
-Read this before modifying the project. Continue from this architecture; do not
-redesign it unless a requirement forces the change.
+Read this before changing the project. Preserve working parts and make focused changes. Do not redesign unrelated systems.
 
-## What this app is
+## Product
 
-A home-network tool. Person A sends a Premiere project folder to a render PC;
-the render PC renders it in Adobe Media Encoder and sends the MP4 back. It is
-for family use — no server, no accounts, no payments, nothing running when the
-app is closed.
+FileSender is one Windows application with Sender and Render Station roles. Sender and Render Station can be on completely different networks and physical locations.
 
-## Invariants (do not break these)
+The production transport is Supabase over the internet. The old V2 LAN implementation is legacy/reference material only and must not become the primary path again.
 
-1. **Sender + Render Station = the same application.** One executable, two tabs.
-2. **The app only works while it is open.** No Windows services, no scheduled
-   tasks.
-3. **The Sender drives every exchange.** The station never dials back to the
-   sender, so only the station needs an inbound firewall rule.
-4. **The render must not disturb the render-PC operator.** Media Encoder is
-   launched minimised, below-normal priority, without focus, and the agent
-   starts the batch unattended. Keep it that way.
-5. **Nothing from the network is trusted.** Every path is validated before a
-   byte is written; every file is checksummed on arrival and on return.
-6. **`src/core` has no Qt and no sockets.** It is pure, tested Python. Network,
-   render and UI sit on top of it.
+## Non-negotiable UX
 
-## Module map
+### Sender
 
-The original prototype names are kept; the stubs are now real implementations.
+- No normal-use IP address entry.
+- No port entry.
+- No pairing code.
+- Show registered Render Stations by name with cloud-derived Online / Busy / Offline status.
+- Disable **SEND** while the selected station is Offline.
+- Re-check station availability immediately before creating a cloud job.
+- Busy stations remain sendable because jobs can queue.
+- Remember the selected station.
+- Support drag-and-drop of either a `.prproj` file or a Premiere project folder.
+- Do not permanently duplicate or modify the Sender's original project.
+- The same project may be sent repeatedly; every send is a new Job.
 
-```
-src/
-  main.py                  entry point (GUI / --station / --check)
-  app.py                   PremiereRenderApp launcher class
-  core/                    pure logic, unit-tested, no Qt / no sockets
-    protocol.py            framed messages, message types, pairing HMAC
-    manifest.py            folder scan, hashing, path safety, resume diff
-    jobs.py                JobSpec / JobRecord / JobState / JobStore
-    workflow.py            high-level Workflow state machine (UI binds to this)
-    workspace.py           render-station directory layout
-    config.py              persisted settings + platform paths
-    project_probe.py       reads sequence names out of a .prproj
-    log.py                 rotating file log + in-app ring buffer
-  network/
-    session.py             RenderStation server + ClientSession
-                           (+ NetworkSession / Peer helpers)
-    discovery.py           UDP beacon (station) and listener (sender)
-  transfer/
-    transfer_engine.py     SenderClient (one conversation), SendWorker
-                           (whole job), TransferEngine (progress tracker)
-    chunk_manager.py       chunk split + file iterator
-  render/
-    media_encoder.py       AME discovery, agent install, submit + monitor,
-                           background launch
-    pipeline.py            RenderBackend interface, AmeBackend, ManualBackend,
-                           RenderManager (queue worker)
-    output_monitor.py      watch an output folder for a finished MP4
-    jsx/PremiereRenderAgent.jsx   ExtendScript agent that runs inside AME
-  return_transfer/
-    return_manager.py      pull one job's MP4 back to a local folder
-  ui/                      PySide6 only; talks to the layers below via signals
-tests/                     stdlib unittest, no third-party deps, no Qt needed
+### Render Station
+
+- Opening FileSender starts the remote station worker and heartbeat automatically.
+- Closing FileSender stops the worker and marks the station offline.
+- No **Go Online** / **Go Offline** controls.
+- No pairing-code UI.
+- Local IP may exist only as diagnostic information and must never be required for connection.
+- **Accept incoming jobs automatically** controls whether a newly uploaded job starts without operator approval.
+- Keep the local project storage location and retention setting configurable.
+- Do not leave a hidden FileSender background process running after the app closes.
+
+## Authentication
+
+User-facing authentication is only:
+
+```text
+Username
+Password
+Log In
 ```
 
-## Threading rules
+No email, magic link, OTP, or pairing code should be requested from the user.
 
-- Long work never runs on the Qt thread. Workers are `threading.Thread`.
-- Workers reach the UI only through Qt signals; never touch a widget from a
-  worker thread.
-- `JobStore` is the single source of truth on the station and is lock-guarded.
+The current Supabase adapter maps the username to a synthetic email identity internally because Supabase email/password Auth expects an email-shaped identifier. This implementation detail must never appear in the UI.
 
-## Job lifecycle
+Persist the authenticated session so normal launches do not require another login. Never embed a Supabase secret/service-role key or database password in the desktop application.
 
+## Supabase
+
+Project:
+
+```text
+File Sender
+https://dyvhlaljbgpyywrofrbg.supabase.co
 ```
-created -> transferring -> queued -> rendering -> encoded -> returning -> complete
-                                 \-> failed / cancelled
+
+The client uses the public project URL and publishable key. Sensitive backend credentials remain server-side and out of source control.
+
+Use:
+
+- Supabase Auth
+- Supabase Postgres
+- private Supabase Storage
+- authenticated/scoped database and storage access
+- the current polling presence/status model for the synchronous desktop client
+
+Do not proxy large Premiere uploads/downloads through an Edge Function.
+
+Large transfers use direct Storage access with resumable/chunked transfer.
+
+## Station identity and presence
+
+Station identity is stable and independent of IP address.
+
+Persist:
+
+- station ID
+- station name
+- owner/user ID
+- status
+- last_seen
+- app version
+- capabilities
+
+While FileSender is running in Render Station mode, update heartbeat/last_seen. If heartbeats stop beyond the configured timeout, the station is Offline.
+
+## Sender offline rule
+
+This is mandatory:
+
+```text
+Offline station -> SEND disabled -> no large upload
 ```
 
-`JobStore` re-queues anything left in `rendering`/`returning` after a restart,
-because Media Encoder can't resume a half-finished batch item.
+Also perform a second availability check in the worker immediately before job creation to close the race between UI state and actual station state.
 
-## How Media Encoder is driven
+If a station becomes unavailable after a job is created/uploaded, keep the job recoverable. Do not delete cloud data required by the job.
 
-AME has no supported command line, so we install `PremiereRenderAgent.jsx` into
-`%APPDATA%\Adobe\Startup Scripts CC\Adobe Media Encoder\`. AME runs it at
-startup; it polls a queue folder, adds each job to the batch, starts it, and
-writes status files back. Python watches both the status files and the output
-file, so a missed script event never strands a job. If the agent can't run, the
-station falls back to `ManualBackend` (operator renders, drops the file in the
-job's `output/`; the return still happens automatically).
+## Jobs
 
-## Adding a render backend
+Keep Project and Job separate.
 
-Subclass `RenderBackend` in `render/pipeline.py`, implement `available()` and
-`render()`. `render()` must honour the `cancel()` callback, report through
-`progress(fraction, message)`, return the produced file, and raise `RenderError`
-on failure. Register it in `build_backend()`.
+Project = Premiere project and its files.
+
+Job = one render request.
+
+Example:
+
+```text
+MyVideo -> Job-001
+MyVideo -> Job-002
+MyVideo -> Job-003
+```
+
+Never de-duplicate jobs using content hashes. Hashes are for integrity, resume, and verification.
+
+Use a backend UUID plus a readable display label.
+
+Recommended remote states:
+
+```text
+created
+uploading
+uploaded
+waiting_for_station
+downloading
+queued
+rendering
+encoded
+uploading_result
+ready_for_download
+downloading_result
+complete
+failed
+cancelled
+```
+
+## Storage
+
+Private buckets:
+
+```text
+project-files
+render-results
+```
+
+Object layout:
+
+```text
+user/{user_id}/jobs/{job_id}/project/...
+user/{user_id}/jobs/{job_id}/output/...
+```
+
+Every job has isolated paths.
+
+For large files, use resumable/chunked application-level transfer. Chunk discovery must list the containing folder and filter object names rather than assuming Storage `list()` treats a complete object path as a prefix.
+
+Storage cleanup must recursively find descendants under the job prefix. Never delete an active or recoverable job's files.
+
+## Database and RLS
+
+The migrations must be reproducible from the repository.
+
+RLS must ensure a signed-in account can only access its own stations, jobs, job files, job events, and storage objects.
+
+The current release intentionally uses simple username/password authentication for family use. Do not add email collection to the UI.
+
+## Render pipeline
+
+Preserve the existing local render machinery:
+
+```text
+remote job
+ -> local job workspace
+ -> existing JobStore / RenderManager
+ -> Media Encoder
+ -> output verification
+ -> cloud result upload
+```
+
+Media Encoder should run minimized/below-normal priority without stealing focus.
+
+The Render Station should automatically install the JSX agent before selecting the render backend.
+
+If Media Encoder is genuinely unavailable, Settings must make the manual fallback visible instead of silently waiting.
+
+## Architecture boundaries
+
+Keep these boundaries:
+
+```text
+src/core      pure business logic
+src/remote    Supabase/cloud transport and remote services
+src/render    Media Encoder/render execution
+src/ui        PySide6 presentation
+```
+
+The UI must not contain raw database logic.
+
+The normal product must not expose legacy LAN UI or settings.
+
+## Legacy/reference material
+
+Legacy LAN implementation should remain outside the production source tree, under an explicitly named archive/reference location if retained.
+
+It is not part of the Remote V3 runtime.
+
+Do not restore direct TCP, UDP discovery, pairing-code authentication, manual IP entry, or Go Online/Go Offline controls to the production workflow.
+
+## Configuration
+
+Client configuration is centralized. Only the public Supabase URL and publishable key belong in the desktop client.
+
+Never commit:
+
+- service-role/secret keys
+- database passwords
+- private credentials
+- user session tokens
+
+## Installer
+
+Final product installer:
+
+```text
+FileSender.exe
+```
+
+It must bundle the application runtime and required dependencies so normal users do not need Python or developer tools.
+
+Uninstall must work through Windows Settings -> Apps and Control Panel -> Programs and Features.
+
+The FileSender Windows icon is `assets/FileSender.ico` and should be used for the executable, installer, shortcuts, title bar, and taskbar.
 
 ## Testing
 
-```
+Run:
+
+```powershell
 python -m unittest discover -s tests -t .
 ```
 
-Tests must keep passing without PySide6 and without a network. `test_end_to_end`
-starts a real station on an ephemeral port with a stub backend — extend it
-whenever you touch the protocol. Don't edit tests to force a pass.
+Automated tests should not require PySide6, a live network, or Adobe software.
 
-## Remaining milestones (from the original build order)
+Do not modify tests simply to force them to pass.
 
-1. Production UI polish and a proper first-run wizard.
-2. Test on two real Windows PCs with Premiere + Media Encoder.
-3. Signed Windows installer (Inno Setup) over the PyInstaller output.
-4. Optional: render several sequences from one project; auto-pick the least
-   busy station.
+A passing fake-transport suite does not prove live Supabase, two-network transfer, Windows UI, or real Media Encoder automation.
+
+Before release, test on real Windows machines:
+
+1. username/password login against the live Supabase project
+2. station registration and heartbeat
+3. offline SEND blocking
+4. two different networks
+5. large/resumable transfer
+6. repeated sends of the same project
+7. real Premiere Pro / Adobe Media Encoder render
+8. MP4 return/checksum verification
+9. retention and delete-after-delivery
+10. FileSender.exe install/uninstall
+
+## Handoff
+
+The Other AI develops code, runs automated tests, and provides complete repository ZIPs plus change reports.
+
+The repository maintainer handles GitHub uploads, branch organization, and merges.
+
+Never claim GitHub was updated unless it actually was.
