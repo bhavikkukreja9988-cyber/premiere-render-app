@@ -1,105 +1,73 @@
-# PRAP/2 — wire protocol
+# FileSender Remote V3 Protocol
 
-Protocol version: `2`. Default TCP port `49872`, discovery UDP port `49873`.
+Remote V3 uses authenticated Supabase database and private Storage operations over HTTPS. The production client does not use direct Sender-to-Station TCP or UDP discovery.
 
-## Framing
+## Authentication
 
-```
-[4 bytes big-endian header length][UTF-8 JSON header][raw payload bytes]
-```
+User-facing:
 
-Header shape:
-
-```json
-{"t": "file_chunk", "p": {"path": "footage/a.mov"}, "n": 1048576}
+```text
+Username + Password
 ```
 
-`n` is the payload length in bytes and is `0` for control messages. Binary data
-is never base64-encoded, so a 200 GB folder costs no encoding overhead.
+The username is internally mapped to a synthetic email-shaped Supabase Auth identity. The synthetic address is never shown to users.
 
-Limits: header ≤ 1 MiB, payload ≤ 16 MiB, default chunk 1 MiB.
+## Station presence
 
-## Session
+The Render Station registers a stable Station ID and periodically updates `status`, `last_seen`, `app_version`, and `capabilities`.
 
-The sender opens every connection. Phases are independent connections, so a
-station reboot mid-render only costs a retry.
+The Sender treats a station as Online when its recent `last_seen` is within the configured timeout. Busy is separate and remains sendable.
 
-```
-sender                          station
-  |  hello {protocol, sender_name} ->
-  |  <- hello_ok {name, port, busy, queue_length, requires_code, nonce, free_bytes, backend}
-  |  auth {token = HMAC-SHA256(pairing_code, nonce)} ->
-  |  <- auth_ok
-```
+## Job lifecycle
 
-The pairing code itself never crosses the wire.
-
-### Submitting
-
-```
-  |  job_offer {spec, manifest[{path, size, mtime, sha256}]} ->
-  |  <- job_accept {job_id, need: {path: offset}, chunk_size}
-  |  file_begin {path, offset, size} ->
-  |  file_chunk [payload] ->        (repeated)
-  |  file_end {path, sha256} ->
-  |  <- file_ok {path}
-  |  transfer_done {job_id} ->
-  |  <- job_queued {job_id, queue_length}
+```text
+created
+  -> uploading
+  -> uploaded
+  -> waiting_for_station
+  -> downloading
+  -> queued
+  -> rendering
+  -> encoded
+  -> uploading_result
+  -> ready_for_download
+  -> downloading_result
+  -> complete
 ```
 
-`need` is the resume map: files already present with a matching hash are
-omitted, partial files carry the byte offset to continue from.
+Failure/cancellation may end in `failed` or `cancelled`.
 
-### Waiting and collecting
+## Project transfer
 
-```
-  |  status_req {job_id} ->     |  <- status {spec, state, progress, message, error, ...}
-  |  result_fetch {job_id, offset} ->
-  |  <- result_begin {filename, size, sha256}
-  |  <- result_chunk [payload]  (repeated)
-  |  <- result_end {job_id, size}
-  |  result_ack {job_id, delete_remote} ->
-  |  <- status {…state: complete}
-  |  bye ->
-```
+Every Send action creates a unique Job ID. Identical project hashes are allowed across different jobs.
 
-`cancel {job_id}` is answered with `cancel_ok`. `ping` is answered with `pong`.
-`presets_req` returns the station's Media Encoder preset names.
+Project metadata is recorded in `jobs`; manifest entries are recorded in `job_files`.
 
-## Errors
+Storage paths:
 
-Any message may be answered with:
-
-```json
-{"t": "error", "p": {"code": "unsafe_manifest", "message": "parent traversal rejected"}}
+```text
+project-files/user/{user_id}/jobs/{job_id}/project/...
+render-results/user/{user_id}/jobs/{job_id}/output/...
 ```
 
-Codes: `protocol_mismatch`, `auth_failed`, `bad_offer`, `unsafe_manifest`,
-`unsafe_path`, `insufficient_space`, `checksum_mismatch`, `verify_failed`,
-`no_job`, `no_file`, `unknown_job`, `no_result`, `unknown_message`,
-`protocol_error`, `internal_error`.
+Large files use application-level chunk objects plus a manifest. Interrupted uploads reuse parts that are already present. Interrupted downloads reuse complete local chunks.
 
-The receiving client raises `RemoteError` carrying the code.
+## Render result
 
-## Discovery
+The Render Station uploads the finished output and records its SHA-256. The Sender verifies the checksum before marking the Job complete.
 
-The station broadcasts to `255.255.255.255:49873` every 2 seconds:
+## Reliability
 
-```json
-{"magic": "premiere-render-app", "protocol": 2, "name": "RENDER-01",
- "port": 49872, "busy": false, "queue_length": 0, "requires_code": true,
- "free_bytes": 812000000000, "backend": "Adobe Media Encoder"}
-```
+The station has an independent recovery sweep in addition to status polling. A missed status update should not permanently strand a queued job.
 
-Senders drop stations not heard from for 8 seconds. Broadcast is a convenience
-only — a typed IP address bypasses it entirely.
+The Sender re-polls job state while waiting for the result and retries transient errors.
 
-## Security model
+If the station is Offline before job creation, Send is blocked. If it goes Offline after a job exists, the cloud job remains recoverable.
 
-- Pairing code + nonce HMAC gates every operation after `hello`.
-- Manifest paths are rejected if absolute, drive-qualified, UNC, containing
-  `..`, using NT reserved device names, or holding characters Windows cannot
-  store. Each write is re-checked with `safe_join` against the job root.
-- Free-space is checked before accepting an offer.
-- This is a LAN trust model: traffic is not encrypted. Do not expose port 49872
-  to the internet.
+## Security
+
+Database rows are protected by RLS. Storage buckets are private. Client code must never contain a service-role/secret key or database password.
+
+## Legacy
+
+The previous framed TCP protocol, UDP discovery and pairing authentication are historical reference only. They are not part of the Remote V3 runtime.
