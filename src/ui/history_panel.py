@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QPushButton,
                                QVBoxLayout, QWidget)
 
 from ..core.jobs import JobRecord, JobStore
-from .sender_panel import open_in_file_manager
+from .helpers import open_in_file_manager
 from .theme import state_colour
 
 LOCAL_COLUMNS = ["Job", "Project", "Status", "Started", "Completed", "Output"]
