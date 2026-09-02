@@ -23,7 +23,7 @@ from ..remote.models import Station
 from ..remote.send_gate import evaluate_send
 from ..remote.sender_service import RemoteProgress, RemoteSendRequest, RemoteSendWorker
 from ..remote.transport import RemoteError
-from .sender_panel import open_in_file_manager
+from .helpers import open_in_file_manager
 from .theme import BAD, OK, WARN
 
 logger = get_logger("ui.remote_sender")
@@ -354,7 +354,7 @@ class RemoteSenderPanel(QWidget):
         if self._external_media:
             names = ", ".join(Path(p).name for p in self._external_media[:5])
             more = f" and {len(self._external_media) - 5} more" if \
-                len(self._external_media) > 5 else ""
+                 len(self._external_media) > 5 else ""
             self.external_warning.setText(
                 "⚠ This project references media outside the selected folder "
                 f"({names}{more}). Those files may be offline on the Render "
