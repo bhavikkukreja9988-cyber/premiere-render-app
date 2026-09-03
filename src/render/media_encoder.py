@@ -4,7 +4,7 @@ Media Encoder has no supported command line, so automation goes through its
 ExtendScript startup-script hook: we install ``PremiereRenderAgent.jsx`` into
 the per-user startup scripts folder, and the agent polls a queue directory for
 jobs. Python writes jobs, the agent renders them, and both sides communicate
-through small key=value files under ``%APPDATA%/PremiereRenderApp/ame``.
+through small key=value files under ``%APPDATA%/FileSender/ame``.
 
 Because a scripting bridge inside a GUI application is never fully reliable,
 completion is detected two ways at once: the agent's status file *and* a direct
@@ -160,7 +160,7 @@ def launch_ame(exe: Path) -> None:
 
 # -- agent plumbing --------------------------------------------------------
 def agent_base() -> Path:
-    """Must match ``Folder.userData/PremiereRenderApp/ame`` inside the JSX."""
+    """Must match ``Folder.userData/FileSender/ame`` inside the JSX."""
     return app_data_dir() / "ame"
 
 
