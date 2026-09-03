@@ -12,15 +12,16 @@
  * no JSON parser, and Windows paths inside JS string literals are a
  * backslash-escaping minefield. Paths are always written with forward slashes.
  *
- * Queue file   <userData>/PremiereRenderApp/ame/queue/<job_id>.job
+ * Queue file   <userData>/FileSender/ame/queue/<job_id>.job
  *   job_id=...    project=...   sequence=...   preset=...   output=...
  *
- * Status file  <userData>/PremiereRenderApp/ame/status/<job_id>.status
+ * Status file  <userData>/FileSender/ame/status/<job_id>.status
  *   state=accepted|rendering|complete|error   progress=0..1
  *   output=...    message=...   updated=<ms since epoch>
  *
- * NOTE: Adobe requires "Allow Scripts to Write Files and Access Network" to be
- * enabled in Media Encoder > Preferences > General for this agent to work.
+ * NOTE: this path must exactly match Python's core.config.app_data_dir()
+ * (currently APP_NAME = "FileSender"). If that name is ever changed, this
+ * line has to change with it, or the agent silently stops receiving jobs.
  */
 
 var PRA = (function () {
@@ -28,7 +29,7 @@ var PRA = (function () {
     var POLL_MS = 2000;
 
     var base = String(Folder.userData.fsName).replace(/\\/g, "/") +
-               "/PremiereRenderApp/ame";
+               "/FileSender/ame";
     var queuePath = base + "/queue";
     var statusPath = base + "/status";
     var logPath = base + "/agent.log";
