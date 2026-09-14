@@ -71,8 +71,22 @@ class AppConfig:
     last_station_id: str = ""
     delete_remote_after_return: bool = False
 
-    # Remote identity / session UI
-    remote_username: str = ""
+    # Device identity (replaces the old username/password login)
+    #
+    # device_name is what this PC calls itself in other people's dropdowns.
+    # Deliberately NOT defaulted to the machine hostname: two PCs in one house
+    # often have near-identical hostnames, which made them indistinguishable
+    # in the station picker and led to people sending jobs to themselves.
+    device_name: str = ""
+    # Devices sharing a family code can see each other. Typed once at setup,
+    # changeable later in Settings. This is the visibility boundary — treat it
+    # like a shared password, not a public name.
+    family_code: str = ""
+
+    @property
+    def setup_complete(self) -> bool:
+        """Setup is done once this PC has a name and a family code."""
+        return bool(self.device_name.strip() and self.family_code.strip())
 
     @property
     def workspace(self) -> Path:
@@ -89,6 +103,16 @@ class AppConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def normalise_family_code(code: str) -> str:
+    """Lowercase and collapse whitespace so near-identical codes still match.
+
+    Without this, "Smith Family" and "smith family" are different codes and
+    the two PCs silently never see each other — the same class of bug that
+    made stations look permanently offline.
+    """
+    return " ".join((code or "").strip().lower().split())
 
 
 def config_path() -> Path:

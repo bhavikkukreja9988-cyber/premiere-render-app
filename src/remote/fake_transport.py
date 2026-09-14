@@ -45,6 +45,36 @@ class FakeTransport(RemoteTransport):
         self.fail_next_upload = False
         self.offline = False
 
+    def new_client(self) -> "FakeTransport":
+        """A second, independent connection to the same simulated backend.
+
+        Real life: every PC runs its own supabase-py client with its own
+        session, even though they all talk to the same Supabase project.
+        A single FakeTransport instance only tracks ONE "currently signed
+        in" session, which is fine when two simulated PCs share the same
+        account (same family code) — signing in twice just re-confirms the
+        same session. It silently breaks for tests simulating two
+        DIFFERENT, simultaneously active identities (e.g. two different
+        family codes): the second sign-in would clobber the first's session
+        even though, on real infrastructure, both stay independently valid.
+
+        This returns a lightweight clone sharing all underlying data by
+        reference (accounts, tables, buckets, realtime subscriptions — so
+        writes from one client are visible to the other, exactly like one
+        real backend) but with its own, independent ``_session``.
+        """
+        clone = FakeTransport.__new__(FakeTransport)
+        clone._lock = self._lock
+        clone._accounts = self._accounts
+        clone._by_id = self._by_id
+        clone._tables = self._tables
+        clone._buckets = self._buckets
+        clone._session = None
+        clone._subs = self._subs
+        clone.fail_next_upload = False
+        clone.offline = False
+        return clone
+
     # -- helpers ----------------------------------------------------------
     def _require_user(self) -> str:
         if not self._session or not self._session.valid:

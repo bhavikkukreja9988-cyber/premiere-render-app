@@ -74,6 +74,8 @@ class Station:
     app_version: str = ""
     capabilities: Dict[str, Any] = field(default_factory=dict)
     local_ip: str = ""               # informational only
+    family_code: str = ""            # visibility boundary between households
+    device_name: str = ""            # what the user named this PC
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -108,6 +110,11 @@ class RemoteJob:
     output_sha256: str = ""
     error: str = ""
     delete_after_delivery: bool = False
+    family_code: str = ""
+    # Live progress published by the receiving station so the sender can show
+    # what's actually happening instead of a silent wait.
+    progress: float = 0.0
+    progress_label: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property

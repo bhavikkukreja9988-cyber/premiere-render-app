@@ -26,7 +26,7 @@ def make_config(**over) -> RemoteConfig:
 def signed_in_services(config):
     transport = FakeTransport()
     auth = AuthService(transport, config)
-    auth.sign_up("owner", "pw12")
+    auth.ensure_signed_in("test-family")
     return (transport,
             StationService(transport, config),
             RemoteJobService(transport, config),
@@ -68,12 +68,12 @@ class TestRemoteJobs(unittest.TestCase):
         self.assertIn(a.id, pending)
         self.assertNotIn(b.id, pending)
 
-    def test_jobs_isolated_between_users(self):
-        self.jobs.create_job("RS-1", "Secret")
-        other_auth = AuthService(self.transport, self.config)
-        other_auth.sign_up("stranger", "pw12")
-        other_jobs = RemoteJobService(self.transport, self.config)
-        self.assertEqual(other_jobs.list_jobs(), [])
+    def test_jobs_carry_their_family_code(self):
+        # Per-user isolation was removed deliberately: every device now shares
+        # one account, and the family code is the visibility boundary. A job
+        # must carry the code so the right household can find it.
+        job = self.jobs.create_job("RS-1", "Secret", family_code="smiths")
+        self.assertEqual(self.jobs.get_job(job.id).family_code, "smiths")
 
     def test_realtime_fires_on_new_job(self):
         seen = []
@@ -160,7 +160,7 @@ class TestCloudRoundTrip(unittest.TestCase):
         config = make_config()
         transport = FakeTransport()
         auth = AuthService(transport, config)
-        auth.sign_up("family", "pw12")
+        auth.ensure_signed_in("test-family")
 
         stations = StationService(transport, config)
         jobs = RemoteJobService(transport, config)

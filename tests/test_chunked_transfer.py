@@ -44,7 +44,7 @@ class CountingTransport:
 
 def signed_in_transport() -> FakeTransport:
     transport = FakeTransport()
-    AuthService(transport, make_config()).sign_up("family", "pw1234")
+    AuthService(transport, make_config()).ensure_signed_in("test-family")
     return transport
 
 

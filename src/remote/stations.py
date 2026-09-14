@@ -34,20 +34,24 @@ class StationService:
 
     # -- registration -----------------------------------------------------
     def register(self, station_id: str, name: str, app_version: str,
-                 local_ip: str = "", capabilities: Optional[dict] = None) -> Station:
+                 local_ip: str = "", capabilities: Optional[dict] = None,
+                 family_code: str = "", device_name: str = "") -> Station:
         """Create or update this PC's station row and mark it online now."""
         user_id = self.transport.current_user_id
         now = time.time()
         existing = self.transport.select("stations", {"id": station_id})
         station = Station(
-            id=station_id, user_id=user_id, name=name, status="online",
-            last_seen=now, app_version=app_version,
+            id=station_id, user_id=user_id, name=device_name or name,
+            family_code=family_code, device_name=device_name or name,
+            status="online", last_seen=now, app_version=app_version,
             capabilities=capabilities or {}, local_ip=local_ip,
             updated_at=now,
         )
         if existing:
             self.transport.update("stations", {"id": station_id}, {
-                "name": name, "status": "online", "last_seen": now,
+                "name": device_name or name, "device_name": device_name or name,
+                "family_code": family_code,
+                "status": "online", "last_seen": now,
                 "app_version": app_version, "local_ip": local_ip,
                 "capabilities": station.capabilities, "updated_at": now,
             })
@@ -97,9 +101,20 @@ class StationService:
         logger.info("station %s offline", station_id)
 
     # -- discovery (sender side) -----------------------------------------
-    def list_stations(self) -> List[Station]:
-        rows = self.transport.select("stations", order_by="name")
-        return [Station.from_row(r) for r in rows]
+    def list_stations(self, family_code: str = "",
+                      exclude_station_id: str = "") -> List[Station]:
+        """Stations in this family, newest heartbeat first.
+
+        ``exclude_station_id`` removes this PC from its own list — sending a
+        job to yourself uploads to the cloud and downloads it straight back,
+        which looks exactly like a failure and is never what anyone wants.
+        """
+        match = {"family_code": family_code} if family_code else None
+        rows = self.transport.select("stations", match, order_by="name")
+        stations = [Station.from_row(r) for r in rows]
+        if exclude_station_id:
+            stations = [s for s in stations if s.id != exclude_station_id]
+        return stations
 
     def online_stations(self, now: Optional[float] = None) -> List[Station]:
         offline_after = self.config.station_offline_after

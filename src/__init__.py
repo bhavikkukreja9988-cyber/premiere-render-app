@@ -1,3 +1,3 @@
 """FileSender — remote Premiere Pro project transfer and rendering."""
 
-__version__ = "3.0.1"
+__version__ = "3.2.0"

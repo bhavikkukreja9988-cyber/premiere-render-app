@@ -84,10 +84,12 @@ class RemoteStationWorker:
         }
         self.client.stations.register(
             self.config.station_id,
-            self.config.station_name,
+            self.config.device_name or self.config.station_name,
             app_version=__version__,
             local_ip=self._local_ip(),
             capabilities=capabilities,
+            family_code=self.config.family_code,
+            device_name=self.config.device_name or self.config.station_name,
         )
         self.client.stations.start_heartbeat(self.config.station_id)
         self.manager.start()
@@ -254,15 +256,18 @@ class RemoteStationWorker:
                 raise RemoteError("job has no files recorded")
 
             project_root = workspace.project_dir(self.config.workspace, job.id)
+            # Publish real progress so the sender sees movement instead of a
+            # silent wait. Scaled to 0-40% of the job: download is the first
+            # of three phases (download, render, upload result).
+            def _download_progress(path, done, total):
+                fraction = (done / total) if total else 0.0
+                self.client.jobs.report_progress(
+                    job.id, fraction * 0.4,
+                    f"Downloading {Path(path).name}")
+
             self.client.storage.download_project(
-                job.id,
-                entries,
-                project_root,
-                on_progress=lambda path, done, total: (
-                    self.client.jobs.add_event(
-                        job.id, "downloading", f"{path} ({done}/{total})"
-                    ) if done == total else None
-                ),
+                job.id, entries, project_root,
+                on_progress=_download_progress,
             )
             workspace.prepare_job_dirs(self.config.workspace, job.id)
             spec = JobSpec(
@@ -320,6 +325,10 @@ class RemoteStationWorker:
 
         if kind == "render_started":
             self.client.jobs.set_state(job_id, RemoteJobState.RENDERING, message="rendering")
+            # 40% = download done. Rendering has no reliable percentage from
+            # Media Encoder, so it sits at 40 with a clear label rather than
+            # showing a fake climbing number.
+            self.client.jobs.report_progress(job_id, 0.4, "Rendering in Media Encoder")
             self.client.stations.set_busy(self.config.station_id, True)
         elif kind == "render_finished":
             self._upload_result(job_id, Path(data.get("output", "")))
@@ -328,6 +337,7 @@ class RemoteStationWorker:
             self.client.jobs.set_state(
                 job_id, RemoteJobState.FAILED, error=data.get("error", "render failed")
             )
+            self.client.jobs.report_progress(job_id, 0.0, "Render failed")
             self.client.stations.set_busy(self.config.station_id, False)
 
     def _upload_result(self, job_id: str, output_file: Path) -> None:
@@ -341,8 +351,15 @@ class RemoteStationWorker:
             self.client.jobs.set_state(job_id, RemoteJobState.UPLOADING_RESULT,
                                        message="uploading the rendered result")
             from ..core.manifest import hash_file
+            self.client.jobs.report_progress(job_id, 0.7, "Uploading rendered file")
             digest = hash_file(output_file)
-            self.client.storage.upload_result(job_id, output_file)
+            self.client.storage.upload_result(
+                job_id, output_file,
+                on_progress=lambda done, total: self.client.jobs.report_progress(
+                    job_id, 0.7 + (0.3 * (done / total if total else 1.0)),
+                    "Uploading rendered file"),
+            )
+            self.client.jobs.report_progress(job_id, 1.0, "Ready to download")
             self.client.jobs.set_output_ready(job_id, output_file.name, digest)
             self.client.jobs.set_state(job_id, RemoteJobState.READY_FOR_DOWNLOAD,
                                        message="render complete; result ready")

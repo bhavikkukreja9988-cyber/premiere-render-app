@@ -106,6 +106,7 @@ class RemoteSenderPanel(QWidget):
         self._project_validated = False
         self._external_media: List[str] = []
         self._stations: List[Station] = []
+        self._last_request = None
 
         self._build()
         self.progress_signal.connect(self._on_progress)
@@ -212,6 +213,9 @@ class RemoteSenderPanel(QWidget):
         layout.addWidget(self.detail_label)
 
         button_row = QHBoxLayout()
+        self.retry_button = QPushButton("Retry")
+        self.retry_button.setVisible(False)
+        self.retry_button.clicked.connect(self._retry_send)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setObjectName("danger")
         self.cancel_button.setEnabled(False)
@@ -220,6 +224,7 @@ class RemoteSenderPanel(QWidget):
         self.reveal_button.clicked.connect(
             lambda: open_in_file_manager(
                 Path(self.output_dir_edit.text().strip() or self.config.output_dir)))
+        button_row.addWidget(self.retry_button)
         button_row.addWidget(self.cancel_button)
         button_row.addStretch(1)
         button_row.addWidget(self.reveal_button)
@@ -231,7 +236,13 @@ class RemoteSenderPanel(QWidget):
         if not self.client.signed_in:
             return
         try:
-            stations = self.client.stations.list_stations()
+            # Scope to this household, and never list this PC itself —
+            # sending a job to yourself uploads and downloads it right back,
+            # which is indistinguishable from a failure.
+            stations = self.client.stations.list_stations(
+                family_code=self.config.family_code,
+                exclude_station_id=self.config.station_id,
+            )
         except RemoteError as exc:
             self.station_status.setText(
                 f"<span style='color:{BAD}'>{exc.user_message}</span>")
@@ -277,8 +288,9 @@ class RemoteSenderPanel(QWidget):
         station = self._selected_station()
         if station is None:
             self.station_status.setText(
-                "No render stations yet. Open this app on another PC and set "
-                "it up as a Render Station — it'll appear here automatically.")
+                "No other PCs found. Open FileSender on another PC and give "
+                f"it the same family code ('{self.config.family_code}') — it "
+                "will appear here automatically.")
             return
         if not station.is_online(self.client.config.station_offline_after):
             colour, state = BAD, "Offline"
@@ -415,7 +427,10 @@ class RemoteSenderPanel(QWidget):
             preset=self.preset_combo.currentText().strip(),
             output_name=self.output_name_edit.text().strip(),
             delete_after_delivery=self.delete_after_check.isChecked(),
+            family_code=self.config.family_code,
         )
+        # Remember everything needed to retry without re-picking anything.
+        self._last_request = request
         self.worker = RemoteSendWorker(
             self.client, request,
             on_progress=lambda p: self.progress_signal.emit(p),
@@ -424,6 +439,24 @@ class RemoteSenderPanel(QWidget):
         self.send_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.phase_label.setText("Starting…")
+
+    def _retry_send(self) -> None:
+        """Re-send the last failed job without making the user re-pick
+        the project, station, sequence and preset all over again."""
+        if self._last_request is None:
+            return
+        if self.worker and self.worker.is_alive():
+            return
+        self.retry_button.setVisible(False)
+        setStatus = self.detail_label.setText
+        setStatus("Retrying…")
+        self.worker = RemoteSendWorker(
+            self.client, self._last_request,
+            on_progress=lambda p: self.progress_signal.emit(p),
+            on_state=lambda kind, data: self.state_signal.emit(kind, data))
+        self.worker.start()
+        self.send_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
 
     def _cancel_send(self) -> None:
         if not self.worker:
@@ -451,11 +484,14 @@ class RemoteSenderPanel(QWidget):
 
     def _on_state(self, kind: str, data: dict) -> None:
         if kind == "complete":
+            self.retry_button.setVisible(False)
             self.send_button.setEnabled(True)
             self.cancel_button.setEnabled(False)
             self.phase_label.setText("Finished")
             self.detail_label.setText(f"Saved to {data.get('path')}")
         elif kind in ("failed", "cancelled"):
+            self.retry_button.setVisible(kind == "failed"
+                                         and self._last_request is not None)
             self.send_button.setEnabled(True)
             self.cancel_button.setEnabled(False)
             self.phase_label.setText("Cancelled" if kind == "cancelled" else "Failed")

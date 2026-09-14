@@ -44,7 +44,7 @@ def make_config(**over) -> RemoteConfig:
 def make_client(transport: FakeTransport, remote_config: RemoteConfig,
                 username: str) -> RemoteClient:
     client = RemoteClient(transport, remote_config)
-    client.auth.sign_up(username, "pw1234")
+    client.auth.ensure_signed_in("test-family")
     return client
 
 
@@ -72,7 +72,7 @@ class RemotePipelineTest(unittest.TestCase):
         # Same account (a family shares one login), different local config
         # (as if this were a second physical PC).
         self.station_client = RemoteClient(self.transport, self.remote_config)
-        self.station_client.auth.sign_in("family", "pw1234")
+        self.station_client.auth.ensure_signed_in("test-family")
 
         self.station_config = AppConfig(
             workspace_dir=str(base / "station"),
@@ -223,7 +223,7 @@ class ChunkedTransferThroughPipelineTest(unittest.TestCase):
         self.transport = FakeTransport()
         self.sender = make_client(self.transport, self.remote_config, "family")
         self.station_client = RemoteClient(self.transport, self.remote_config)
-        self.station_client.auth.sign_in("family", "pw1234")
+        self.station_client.auth.ensure_signed_in("test-family")
 
         # Force chunking to actually trigger without needing a real
         # multi-megabyte fixture file.

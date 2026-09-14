@@ -18,7 +18,6 @@ from ..core.config import AppConfig, save_config
 from ..core.log import get_logger, ring
 from .history_panel import JobHistoryPanel
 from .pending_jobs_panel import PendingJobsPanel
-from .remote_login import LoginDialog
 from .remote_sender_panel import RemoteSenderPanel
 from .remote_station_panel import RemoteStationPanel
 from .settings_panel import SettingsPanel
@@ -101,8 +100,6 @@ class MainWindow(QMainWindow):
         self.settings_panel = SettingsPanel(
             config,
             client=self.remote_client,
-            on_sign_out=self._handle_sign_out,
-            on_signed_in=self._handle_signed_in,
             get_station_backend=self._current_backend_name,
         )
         self.log_panel = LogPanel()
@@ -139,14 +136,21 @@ class MainWindow(QMainWindow):
         self._bind_timer.start(1500)
 
     def _bootstrap_cloud(self) -> None:
+        """Set up this device, then connect silently.
+
+        There is no login step any more: the app signs into a shared built-in
+        account in the background. The only thing the user is ever asked is
+        what to call this PC and which family code it belongs to.
+        """
+        # Ask for a device name + family code if this is a fresh install, or
+        # if an older install predates them (upgrade path).
+        if self.config.first_run or not self.config.setup_complete:
+            SetupWizard(self.config, self).exec()
+
         if self.remote_client is None:
             return
-        restored = self.remote_client.auth.restore()
-        if self.config.first_run:
-            SetupWizard(self.remote_client, self.config, self).exec()
-            return
-        if not restored:
-            LoginDialog(self.remote_client, self).exec()
+        if not self.remote_client.auth.ensure_signed_in(self.config.family_code):
+            logger.warning("could not connect to the cloud on startup")
 
     def _start_remote_station_if_signed_in(self) -> None:
         if self.remote_client is None or not self.remote_client.signed_in:
@@ -167,23 +171,6 @@ class MainWindow(QMainWindow):
                 f"FileSender could not start the Render Station.\n\n{exc}",
             )
             self.remote_worker = None
-
-    def _handle_sign_out(self) -> None:
-        if self.remote_worker is not None:
-            try:
-                self.remote_worker.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("error stopping render station during sign-out")
-            self.remote_worker = None
-        if self.remote_client is not None:
-            self.remote_client.auth.sign_out()
-        self.pending_panel.set_worker(None)
-        self._update_status_bar()
-
-    def _handle_signed_in(self) -> None:
-        self._start_remote_station_if_signed_in()
-        self.pending_panel.set_worker(self.remote_worker)
-        self._update_status_bar()
 
     def _current_backend_name(self) -> str:
         return self.remote_worker.backend.name if self.remote_worker else ""

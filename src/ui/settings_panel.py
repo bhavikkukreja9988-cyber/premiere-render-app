@@ -7,10 +7,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
+    QVBoxLayout, QWidget,
 )
 
-from ..core.config import AppConfig, save_config
+from ..core.config import AppConfig, normalise_family_code, save_config
 from ..core.log import get_logger
 from .theme import MUTED, OK, WARN
 
@@ -37,18 +38,27 @@ class SettingsPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setSpacing(12)
 
-        account_box = QGroupBox("Account")
+        account_box = QGroupBox("This PC")
         account_form = QFormLayout(account_box)
-        self.account_label = QLabel("Not signed in")
-        self.sign_in_button = QPushButton("Sign in…")
-        self.sign_in_button.clicked.connect(self._sign_in)
-        self.sign_out_button = QPushButton("Sign out")
-        self.sign_out_button.clicked.connect(self._sign_out)
-        account_row = QHBoxLayout()
-        account_row.addWidget(self.account_label, 1)
-        account_row.addWidget(self.sign_in_button)
-        account_row.addWidget(self.sign_out_button)
-        account_form.addRow("Signed in as", account_row)
+
+        self.device_name = QLineEdit()
+        self.device_name.setPlaceholderText("e.g. Bhavik's PC")
+        account_form.addRow("Name of this PC", self.device_name)
+
+        code_row = QHBoxLayout()
+        self.family_code = QLineEdit()
+        self.family_code.setPlaceholderText("e.g. smith-family")
+        change_code = QPushButton("Change…")
+        change_code.clicked.connect(self._change_family_code)
+        self.family_code.setReadOnly(True)
+        code_row.addWidget(self.family_code, 3)
+        code_row.addWidget(change_code, 1)
+        account_form.addRow("Family code", code_row)
+
+        self.connection_label = QLabel("")
+        self.connection_label.setObjectName("hint")
+        self.connection_label.setWordWrap(True)
+        account_form.addRow("", self.connection_label)
         outer.addWidget(account_box)
 
         station_box = QGroupBox("Render Station")
@@ -155,6 +165,8 @@ class SettingsPanel(QWidget):
 
     def _load(self) -> None:
         c = self.config
+        self.device_name.setText(c.device_name)
+        self.family_code.setText(c.family_code)
         self.station_name.setText(c.station_name)
         self.station_role_enabled.setChecked(c.station_role_enabled)
         self.storage_dir.setText(c.workspace_dir)
@@ -184,12 +196,15 @@ class SettingsPanel(QWidget):
                 f"<span style='color:{OK}'>{name}</span> — automated rendering is active.")
 
     def _refresh_account_label(self) -> None:
-        signed_in = bool(self.client and self.client.signed_in)
-        self.account_label.setText(
-            f"<span style='color:{OK}'>{self.client.auth.username}</span>"
-            if signed_in else f"<span style='color:{MUTED}'>Not signed in</span>")
-        self.sign_in_button.setVisible(bool(self.client) and not signed_in)
-        self.sign_out_button.setVisible(signed_in)
+        connected = bool(self.client and self.client.signed_in)
+        if connected:
+            self.connection_label.setText(
+                f"<span style='color:{OK}'>Connected.</span> PCs using the "
+                "family code above can send renders to this one.")
+        else:
+            self.connection_label.setText(
+                f"<span style='color:{MUTED}'>Not connected to the cloud yet "
+                "— check your internet connection.</span>")
 
     def _set_retention(self, days: int) -> None:
         for i in range(self.retention.count()):
@@ -210,6 +225,7 @@ class SettingsPanel(QWidget):
 
     def _save(self) -> None:
         c = self.config
+        c.device_name = self.device_name.text().strip() or c.device_name
         c.station_name = self.station_name.text().strip() or c.station_name
         c.station_role_enabled = self.station_role_enabled.isChecked()
         c.workspace_dir = self.storage_dir.text().strip() or c.workspace_dir
@@ -252,19 +268,44 @@ class SettingsPanel(QWidget):
         if path:
             self.ame_path.setText(path)
 
-    def _sign_out(self) -> None:
-        if self._on_sign_out:
-            self._on_sign_out()
-        elif self.client:
-            self.client.auth.sign_out()
-        self._refresh_account_label()
+    def _change_family_code(self) -> None:
+        """Changing the code moves this PC to a different household.
 
-    def _sign_in(self) -> None:
-        if not self.client:
+        Warned rather than silent: the other PCs keep the old code and this
+        one vanishes from their lists until they're changed too. That looks
+        exactly like the "render station is offline" bug, so it must never be
+        a surprise.
+        """
+        current = self.config.family_code
+        new_code, ok = QInputDialog.getText(
+            self, "Change family code",
+            "Every PC in your household must use the SAME family code.\n\n"
+            "If you change it here, this PC will disappear from the other "
+            "PCs' lists until you change the code on them too.\n\n"
+            "New family code:",
+            text=current)
+        if not ok:
             return
-        from .remote_login import LoginDialog
-        from PySide6.QtWidgets import QDialog
-        dialog = LoginDialog(self.client, self)
-        if dialog.exec() == QDialog.Accepted and self._on_signed_in:
-            self._on_signed_in()
-        self._refresh_account_label()
+        cleaned = normalise_family_code(new_code)
+        if not cleaned:
+            QMessageBox.warning(self, "Family code required",
+                                "The family code cannot be empty.")
+            return
+        if cleaned == current:
+            return
+
+        confirm = QMessageBox.question(
+            self, "Change family code?",
+            f"Change from '{current}' to '{cleaned}'?\n\n"
+            "Remember to set the same code on your other PCs, or they won't "
+            "see each other.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if confirm != QMessageBox.Yes:
+            return
+
+        self.config.family_code = cleaned
+        save_config(self.config)
+        self.family_code.setText(cleaned)
+        QMessageBox.information(
+            self, "Family code changed",
+            "Restart FileSender for the change to take effect.")

@@ -14,7 +14,7 @@ from typing import Callable, List, Optional
 from ..core.log import get_logger
 from .config import RemoteConfig
 from .models import JobEvent, JobFile, RemoteJob, RemoteJobState
-from .transport import RemoteTransport, Unsubscribe
+from .transport import RemoteError, RemoteTransport, Unsubscribe
 
 logger = get_logger("remote.jobs")
 
@@ -32,6 +32,7 @@ class RemoteJobService:
     def create_job(self, station_id: str, project_name: str, *,
                    sequence: str = "", preset: str = "", output_name: str = "",
                    delete_after_delivery: bool = False,
+                   family_code: str = "",
                    metadata: Optional[dict] = None) -> RemoteJob:
         """Create a new job row. Each call is a distinct job (new UUID)."""
         user_id = self.transport.current_user_id
@@ -42,6 +43,7 @@ class RemoteJobService:
             output_name=output_name or project_name,
             status=RemoteJobState.CREATED.value,
             delete_after_delivery=delete_after_delivery,
+            family_code=family_code,
             metadata=metadata or {},
         )
         row = self.transport.insert("jobs", job.to_row())
@@ -110,6 +112,23 @@ class RemoteJobService:
         })
         self.add_event(job_id, RemoteJobState.READY_FOR_DOWNLOAD.value,
                        f"result ready: {filename}")
+
+    def report_progress(self, job_id: str, fraction: float,
+                        label: str = "") -> None:
+        """Publish live progress from the receiving station.
+
+        Updated in place rather than appended as events: progress changes
+        every few percent and would otherwise flood the events table.
+        Failures here are swallowed — losing a progress tick must never
+        interrupt an actual render.
+        """
+        try:
+            self.transport.update("jobs", {"id": job_id}, {
+                "progress": max(0.0, min(1.0, float(fraction))),
+                "progress_label": label,
+            })
+        except RemoteError as exc:
+            logger.debug("progress update failed for %s: %s", job_id[:8], exc)
 
     def get_job(self, job_id: str) -> Optional[RemoteJob]:
         rows = self.transport.select("jobs", {"id": job_id})

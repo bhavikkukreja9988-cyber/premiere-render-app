@@ -40,6 +40,7 @@ class RemoteSendRequest:
     preset: str = ""
     output_name: str = ""
     delete_after_delivery: bool = False
+    family_code: str = ""
     ignore: Sequence[str] = field(default_factory=lambda: DEFAULT_IGNORE)
 
 
@@ -93,6 +94,7 @@ class RemoteSendWorker(threading.Thread):
                 req.project_name,
                 sequence=req.sequence,
                 preset=req.preset,
+                family_code=req.family_code,
                 output_name=req.output_name,
                 delete_after_delivery=req.delete_after_delivery,
                 metadata={"project_relpath": req.project_relpath},
@@ -211,7 +213,12 @@ class RemoteSendWorker(threading.Thread):
                     ahead = 0
                 if ahead > 0:
                     label = f"queued — {ahead} job{'s' if ahead != 1 else ''} ahead of you"
-            self._report("render", 0.0, label)
+            # Prefer the station's own published progress/label — it knows
+            # what's actually happening (downloading X%, rendering, uploading)
+            # far better than we can infer from the state alone.
+            fraction = float(getattr(job, "progress", 0.0) or 0.0)
+            station_label = (getattr(job, "progress_label", "") or "").strip()
+            self._report("render", fraction, station_label or label)
             time.sleep(POLL_SECONDS)
         raise InterruptedError("cancelled")
 
