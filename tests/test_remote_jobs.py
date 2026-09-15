@@ -125,27 +125,27 @@ class TestSendGate(unittest.TestCase):
         import time
         return Station(id="RS-1", name="PC", last_seen=time.time() - 100)
 
-    def test_blocked_until_signed_in(self):
-        gate = evaluate_send(signed_in=False, project_selected=True,
+    def test_blocked_until_connected(self):
+        gate = evaluate_send(connected=False, project_selected=True,
                              project_validated=True,
                              station=self._online_station(), config=self.config)
         self.assertFalse(gate.can_send)
 
     def test_blocked_when_offline_station(self):
-        gate = evaluate_send(signed_in=True, project_selected=True,
+        gate = evaluate_send(connected=True, project_selected=True,
                              project_validated=True,
                              station=self._offline_station(), config=self.config)
         self.assertFalse(gate.can_send)
         self.assertIn("offline", gate.reason.lower())
 
     def test_blocked_without_project(self):
-        gate = evaluate_send(signed_in=True, project_selected=False,
+        gate = evaluate_send(connected=True, project_selected=False,
                              project_validated=False,
                              station=self._online_station(), config=self.config)
         self.assertFalse(gate.can_send)
 
     def test_enabled_when_all_conditions_met(self):
-        gate = evaluate_send(signed_in=True, project_selected=True,
+        gate = evaluate_send(connected=True, project_selected=True,
                              project_validated=True,
                              station=self._online_station(), config=self.config)
         self.assertTrue(gate.can_send)
