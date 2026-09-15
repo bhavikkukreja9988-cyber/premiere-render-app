@@ -21,12 +21,25 @@ class SendGate:
     reason: str            # human-readable; shown when can_send is False
 
 
-def evaluate_send(*, signed_in: bool, project_selected: bool,
+def evaluate_send(*, connected: bool, project_selected: bool,
                   project_validated: bool, station: Optional[Station],
-                  config: RemoteConfig, now: Optional[float] = None) -> SendGate:
-    """Return whether SEND may be enabled, with a friendly reason if not."""
-    if not signed_in:
-        return SendGate(False, "Sign in to send a project.")
+                  config: RemoteConfig, now: Optional[float] = None,
+                  setup_complete: bool = True) -> SendGate:
+    """Return whether SEND may be enabled, with a friendly reason if not.
+
+    ``connected`` is about reaching the cloud, NOT about a login: there is no
+    sign-in step any more. Telling someone to "sign in" when there is no
+    sign-in screen would be actively misleading, so the message names the
+    real problem instead.
+    """
+    if not setup_complete:
+        return SendGate(
+            False,
+            "Finish setup first — this PC needs a name and a family code.")
+    if not connected:
+        return SendGate(
+            False,
+            "Not connected to the cloud. Check your internet connection.")
     if not project_selected:
         return SendGate(False, "Drop or choose a Premiere project first.")
     if not project_validated:
