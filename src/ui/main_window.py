@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import platform
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QIcon
+from PySide6.QtGui import QCloseEvent, QFont, QIcon
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPlainTextEdit,
-    QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import __version__
 from ..core.config import AppConfig, save_config
-from ..core.log import get_logger, ring
+from ..core.log import (get_logger, log_file_path,
+                        previous_log_file_path, ring)
+from .helpers import open_in_file_manager
 from .history_panel import JobHistoryPanel
 from .pending_jobs_panel import PendingJobsPanel
 from .remote_sender_panel import RemoteSenderPanel
@@ -37,27 +41,142 @@ def _icon_path() -> Path:
 
 
 class LogPanel(QWidget):
+    """Live log view with a one-click way to get the log out of the app.
+
+    The whole point of the Save button is diagnosis: when something goes
+    wrong, one click produces a single file covering exactly this run,
+    ready to send. Logs start fresh on every launch (see core.log), so a
+    saved log never contains months of unrelated history.
+    """
+
     line_signal = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
+
         self.view = QPlainTextEdit()
         self.view.setReadOnly(True)
         self.view.setMaximumBlockCount(5000)
         self.view.setPlainText("\n".join(ring.tail(400)))
+        # Monospace keeps timestamps and levels aligned, which makes a wall
+        # of log lines far easier to scan.
+        self.view.setFont(QFont("Consolas", 9))
+        layout.addWidget(self.view)
 
         buttons = QHBoxLayout()
+
+        self.save_button = QPushButton("Save log to file…")
+        self.save_button.setObjectName("primary")
+        self.save_button.setToolTip(
+            "Save this run's log as a single file you can send for help.")
+        self.save_button.clicked.connect(self._save_log)
+        buttons.addWidget(self.save_button)
+
+        self.folder_button = QPushButton("Open log folder")
+        self.folder_button.clicked.connect(self._open_folder)
+        buttons.addWidget(self.folder_button)
+
+        self.copy_button = QPushButton("Copy to clipboard")
+        self.copy_button.clicked.connect(self._copy_log)
+        buttons.addWidget(self.copy_button)
+
         clear = QPushButton("Clear view")
+        clear.setToolTip("Clears only this view — the log file is untouched.")
         clear.clicked.connect(self.view.clear)
-        hint = QLabel("Logs are also written to the app data folder.")
-        hint.setObjectName("hint")
         buttons.addWidget(clear)
-        buttons.addWidget(hint, 1)
-        layout.addWidget(self.view)
+
+        buttons.addStretch(1)
         layout.addLayout(buttons)
+
+        hint = QLabel(
+            "The log starts fresh each time FileSender opens. "
+            "If something goes wrong, click <b>Save log to file…</b> and send "
+            "the file — it covers just this run.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
         self.line_signal.connect(self.view.appendPlainText)
         ring.subscribe(lambda line: self.line_signal.emit(line))
+
+    # -- actions ----------------------------------------------------------
+    def _save_log(self) -> None:
+        """Write this run's log (plus the previous run, if present) to one
+        file the user chooses."""
+        default_name = (f"FileSender-log-"
+                        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt")
+        target, _ = QFileDialog.getSaveFileName(
+            self, "Save log", str(Path.home() / "Desktop" / default_name),
+            "Text files (*.txt);;All files (*)")
+        if not target:
+            return
+
+        try:
+            Path(target).write_text(self._collect_log_text(), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "Could not save log",
+                                f"The log could not be written:\n{exc}")
+            return
+
+        QMessageBox.information(
+            self, "Log saved",
+            f"Saved to:\n{target}\n\nYou can attach this file when asking "
+            "for help.")
+
+    def _collect_log_text(self) -> str:
+        """This run's log, with the previous run appended if it exists.
+
+        Reads the files rather than the on-screen view: the view is capped
+        at 5000 lines and may have been cleared, while the file is complete.
+        Falls back to the in-memory ring buffer if the files can't be read.
+        """
+        parts = [
+            "FileSender log export",
+            f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"App version: {__version__}",
+            f"Platform: {platform.platform()}",
+            "",
+        ]
+
+        current = log_file_path()
+        previous = previous_log_file_path()
+
+        wrote_any = False
+        try:
+            if current.is_file():
+                parts += ["=" * 70, "CURRENT RUN", "=" * 70, "",
+                          current.read_text(encoding="utf-8", errors="replace")]
+                wrote_any = True
+        except OSError as exc:
+            parts.append(f"(could not read current log: {exc})")
+
+        try:
+            if previous.is_file():
+                parts += ["", "=" * 70, "PREVIOUS RUN", "=" * 70, "",
+                          previous.read_text(encoding="utf-8", errors="replace")]
+                wrote_any = True
+        except OSError:
+            pass
+
+        if not wrote_any:
+            parts += ["=" * 70, "IN-MEMORY LOG (log file unavailable)",
+                      "=" * 70, "", "\n".join(ring.tail(5000))]
+
+        return "\n".join(parts)
+
+    def _copy_log(self) -> None:
+        QApplication.clipboard().setText(self._collect_log_text())
+        QMessageBox.information(self, "Copied",
+                                "The log has been copied to the clipboard.")
+
+    def _open_folder(self) -> None:
+        folder = log_file_path().parent
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        open_in_file_manager(folder)
 
 
 def _try_build_remote_client(config: AppConfig):
