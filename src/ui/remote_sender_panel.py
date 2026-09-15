@@ -385,7 +385,8 @@ class RemoteSenderPanel(QWidget):
     def _update_gate(self) -> None:
         station = self._selected_station()
         gate = evaluate_send(
-            signed_in=self.client.signed_in,
+            connected=self.client.signed_in,
+            setup_complete=self.config.setup_complete,
             project_selected=self._project_root is not None,
             project_validated=self._project_validated,
             station=station, config=self.client.config)
