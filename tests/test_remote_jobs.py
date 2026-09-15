@@ -131,6 +131,27 @@ class TestSendGate(unittest.TestCase):
                              station=self._online_station(), config=self.config)
         self.assertFalse(gate.can_send)
 
+    def test_never_tells_the_user_to_sign_in(self):
+        # There is no sign-in screen any more, so a message telling someone
+        # to "sign in" would send them looking for something that does not
+        # exist. Guards against the old wording creeping back.
+        for kwargs in (
+            dict(connected=False, project_selected=True, project_validated=True),
+            dict(connected=True, project_selected=False, project_validated=False),
+            dict(connected=True, project_selected=True, project_validated=False),
+        ):
+            gate = evaluate_send(station=self._online_station(),
+                                 config=self.config, **kwargs)
+            self.assertNotIn("sign in", gate.reason.lower())
+            self.assertNotIn("log in", gate.reason.lower())
+
+    def test_blocked_until_setup_complete(self):
+        gate = evaluate_send(connected=True, setup_complete=False,
+                             project_selected=True, project_validated=True,
+                             station=self._online_station(), config=self.config)
+        self.assertFalse(gate.can_send)
+        self.assertIn("setup", gate.reason.lower())
+
     def test_blocked_when_offline_station(self):
         gate = evaluate_send(connected=True, project_selected=True,
                              project_validated=True,
