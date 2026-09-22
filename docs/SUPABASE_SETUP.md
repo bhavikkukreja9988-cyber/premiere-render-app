@@ -22,8 +22,8 @@ One-time setup of the cloud project that FileSender uses to connect PCs.
 There is no login screen in FileSender. Each **family code** silently maps to
 its own internal account with a synthetic address (e.g.
 `family-3f9a…@filesender.local`) that can never receive email. If
-confirmation is left on, the account is created but can never be used, and the
-app will report that it can't connect — permanently, for that family
+confirmation is left on, the account is created but can never be used, and
+the app will report that it can't connect — permanently, for that family
 code.
 
 ## 3. Run the migrations, in order
@@ -79,3 +79,4 @@ the `supabase_realtime` publication. `003_realtime.sql` adds them.
   download of the finished video count.
 - **Projects pause after about 7 days of low activity.** Restore from the
   dashboard. Having FileSender open on any PC at least weekly prevents it.
+

@@ -1,6 +1,6 @@
 """Best-effort reader for Premiere Pro project files.
 
-A ``prproj`` is a gzip-compressed XML document. We only need the sequence
+A ``.prproj`` is a gzip-compressed XML document. We only need the sequence
 names so the sender can pick one from a dropdown instead of typing it, so this
 parser is deliberately forgiving: anything it cannot understand falls back to
 "let the user type the name", and an unreadable project never blocks a send.
