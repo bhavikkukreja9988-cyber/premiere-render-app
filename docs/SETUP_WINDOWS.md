@@ -1,133 +1,79 @@
 # Windows setup
 
-FileSender connects a Sender PC and a Render Station PC over the internet
-through Supabase — they do not need to be on the same network, and there is
-nothing to configure about IP addresses, ports, or pairing codes. This page
-covers the one-time setup on each PC.
+FileSender connects PCs over the internet through Supabase. They don't need
+to be on the same network, and there's nothing to configure about IP
+addresses, ports, firewalls, usernames or passwords.
 
-## Both PCs
+Complete [SUPABASE_SETUP.md](SUPABASE_SETUP.md) once before any PC runs the
+app.
 
-1. Install FileSender (`FileSender.exe`) and launch it.
-2. On first launch, sign in with a username and password. Everyone who
-   should share render stations signs in with the same username and password —
-   this is the simple shared family-account workflow.
-3. During first-run setup, choose how this PC will be used: **Sender**,
-   **Render Station**, or both. You can change this later in Settings.
+## Every PC
 
-No firewall rule is needed on either PC. FileSender only makes normal
-outbound HTTPS connections to Supabase; nothing needs to accept an inbound
-connection.
+1. Install FileSender (`FileSender.exe`) and open it.
+2. The first time, you're asked for:
+   - **Name this PC** — how it appears in other PCs' lists, e.g.
+     "Bhavik's PC". Use a **different** name on each PC.
+   - **Family code** — use the **same** code on every PC in your household.
+     PCs with matching codes can send renders to each other.
+   - **Where to store received projects**, and how long to keep them
+     (7 days by default).
+3. That's it. You're never asked again. Both can be changed later in
+   **Settings → This PC**.
 
-## Render Station PC
+Every PC can both send and receive — there's no separate "sender" or
+"station" mode. Opening FileSender puts the PC online; closing it takes the
+PC offline.
 
-If you chose Render Station (or both), configure:
+## PCs that will render
 
-- **Station name** — the name shown to Senders.
-- **Project storage location** — where received Premiere projects and media
-  are stored while they render. Use a drive with enough free space for the
-  projects you expect to receive.
-- **Accept incoming jobs automatically** — on by default. Turn it off when
-  you want an operator to approve each job with Accept/Reject.
-- **Delete completed projects after** — optional cleanup for completed local
-  received-project data. It never deletes the Sender's original project.
-- **Adobe Media Encoder** — FileSender detects the installed encoder and
-  installs its scripting agent automatically when the station starts.
+Adobe Media Encoder must be installed. FileSender installs its own Media
+Encoder scripting agent automatically the first time it runs — there's
+nothing to click and no Media Encoder preference to change.
 
-### One Adobe setting is required
+**Settings → Render engine** shows whether automated rendering is active.
+If it says *manual*, Media Encoder wasn't found or isn't responding.
 
-Open **Adobe Media Encoder** and enable:
+## Sending a project
 
-**Edit → Preferences → General → Allow Scripts to Write Files and Access Network**
+1. Drag a Premiere project folder (or `.prproj`) onto the drop area.
+2. Pick the PC to render on. Only **other** PCs with your family code are
+   listed — never this one.
+3. Pick a sequence, preset and output name, then **Send**.
+4. Progress is shown live: uploading → the other PC downloading → rendering
+   → uploading the result → downloading it back to you.
+5. If a send fails, the reason is shown along with a **Retry** button that
+   keeps all your choices.
 
-This Adobe setting must be enabled by the user; FileSender cannot safely
-change it for you.
+## If something goes wrong
 
-Opening FileSender puts the Render Station online automatically. Closing
-FileSender stops the station worker/heartbeat and makes it offline. There is
-no **Go Online**, **Go Offline**, IP, port, or pairing-code workflow.
-
-## Sender PC
-
-The Sender needs only the installed FileSender application and an internet
-connection. It does not need Python, Git, Premiere Pro, Media Encoder, or
-any developer tools.
-
-After signing in:
-
-1. Render Stations appear by name with **Online / Busy / Offline** status.
-2. Select a station. An offline station cannot receive a new job and the
-   **SEND** button is disabled.
-3. Drag a `.prproj` file or Premiere project folder into the drop area, or use
-   Browse.
-4. Choose the sequence/preset/output settings.
-5. Click **SEND**.
-
-Busy stations remain sendable because jobs can queue. The same Premiere
-project may be sent repeatedly; every send creates a new Job.
-
-## Project files and external media
-
-FileSender sends a project folder and validates/hash-checks the files that
-are included. If the Premiere project references media outside the folder,
-resolve that before sending (for example, collect/consolidate the project's
-media in Premiere). The Sender should warn when it can detect external
-references.
-
-The Sender's original project is not modified, moved, or permanently
-duplicated by FileSender.
+Open the **Log** tab and click **Save log to file…**. The log starts fresh
+every time FileSender opens, so the saved file covers just this run (plus the
+one before it). Send that file for help.
 
 ## Troubleshooting
 
-**No stations appear.**
+**The other PC isn't in the list.**
+Check both PCs use exactly the same family code (**Settings → This PC**) and
+that FileSender is open on the other PC. Presence can take up to ~45 seconds
+to update.
 
-Make sure the Render Station PC has FileSender open, is signed into the same
-family account, and has the Render Station role enabled. It may take up to
-the configured heartbeat timeout for status to update.
+**"Not connected to the cloud."**
+Check the internet connection. If it's fine, save the log — the most common
+cause is "Confirm email" still being on in Supabase (see
+SUPABASE_SETUP.md, step 2).
 
-**Station says Offline while FileSender is open.**
+**Jobs sit waiting and never render.**
+On the rendering PC, check **Settings → Render engine**. If it isn't Adobe
+Media Encoder, confirm Media Encoder is installed, then restart FileSender.
+The agent's own log is at `%APPDATA%\FileSender\ame\agent.log`.
 
-Check that the Render Station has internet access and that FileSender can
-reach Supabase. The station status is based on its heartbeat, not its local
-IP address.
+**Media is offline on the rendering PC.**
+The project references files outside the folder that was sent. In Premiere,
+use **File → Project Manager** to collect everything into one folder, then
+send that folder.
 
-**SEND is disabled.**
+## Uninstalling
 
-Read the message below the button. Common reasons are: not signed in, no
-project selected, project validation still running, or the selected station
-is Offline.
-
-**Jobs remain queued.**
-
-Check **Settings → Render station → Render engine**. If Adobe Media Encoder
-is unavailable, FileSender will show that instead of silently pretending that
-automatic rendering is working. Make sure Media Encoder is installed and
-that **Allow Scripts to Write Files and Access Network** is enabled.
-
-**Media Encoder renders the wrong sequence.**
-
-Make sure the selected sequence name matches the project exactly. Leaving
-the sequence blank lets the render pipeline use the project's default
-sequence where supported.
-
-**The result does not return immediately.**
-
-The Sender can be closed while the Render Station continues processing the
-cloud job. Reopen FileSender later and it will resume status polling and
-result download when the MP4 is ready.
-
-**Manual render fallback.**
-
-If automatic Adobe Media Encoder automation is genuinely unavailable, the
-Render Station exposes the manual fallback state. The job remains recoverable
-until a valid rendered output is provided, after which FileSender can return
-it to the Sender.
-
-## Developer-only check
-
-From a source checkout, the local diagnostic command is:
-
-```powershell
-python -m src.main --check
-```
-
-Normal installed users do not need Python to use FileSender.
+**Settings → Apps → FileSender → Uninstall.** All of FileSender's own data
+in `%APPDATA%\FileSender` is removed. If the PC has received projects stored,
+you'll be asked whether to delete those too.
