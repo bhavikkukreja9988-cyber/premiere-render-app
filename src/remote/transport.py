@@ -1,6 +1,6 @@
 """The transport abstraction.
 
-Every remote operation the app needs is declared here as an interface. Two
+Every remote operation the app needs is declared here. Two
 implementations exist:
 
   * ``SupabaseTransport`` — the real one, talking to Supabase over HTTPS.
@@ -30,11 +30,15 @@ class RemoteError(Exception):
 
 
 class NotAuthenticatedError(RemoteError):
-    user_message = "Please sign in again."
+    # There is no sign-in screen any more; the app reconnects by itself.
+    user_message = ("The connection to the cloud expired. FileSender is "
+                    "reconnecting — please try again in a moment.")
 
 
 class AuthError(RemoteError):
-    user_message = "That username or password was not accepted."
+    user_message = ("The cloud account for this family code could not be "
+                    "opened. Check that \"Confirm email\" is turned OFF in "
+                    "Supabase (see docs/SUPABASE_CHECKLIST.txt).")
 
 
 class OfflineError(RemoteError):
@@ -43,11 +47,23 @@ class OfflineError(RemoteError):
 
 
 class AuthorizationError(RemoteError):
-    user_message = "File transfer could not be authorized. Please sign in again."
+    user_message = ("Supabase refused access. The database setup may be "
+                    "incomplete — check that all seven migrations were run "
+                    "(see docs/SUPABASE_CHECKLIST.txt).")
 
 
 class NotFoundError(RemoteError):
     user_message = "The requested item was not found."
+
+
+class QuotaExceededError(RemoteError):
+    """Supabase refused because a plan limit was reached (storage, bandwidth,
+    or per-file size)."""
+
+    user_message = ("Supabase's storage or bandwidth limit has been reached. "
+                    "On the free plan that is 1 GB of stored files and 5 GB "
+                    "of downloads per month. Clear old or failed jobs, wait "
+                    "for the monthly reset, or upgrade the Supabase plan.")
 
 
 def friendly_message(exc: Exception) -> str:
@@ -56,8 +72,8 @@ def friendly_message(exc: Exception) -> str:
     ``RemoteError`` and its subclasses carry a curated ``user_message``
     ("Render Station is offline...") that is unrelated to whatever raw text the
     exception was constructed with. Other exceptions raised in this codebase
-    are already written in plain English, so their ``str()`` is used as-is.
-    Always prefer this over ``str(exc)`` anywhere the text might reach a user.
+    are already written in plain English, so their `str()` is used as-is.
+    Always prefer this over `str(exc)` anywhere the text might reach a user.
     """
     return getattr(exc, "user_message", None) or str(exc)
 
@@ -122,7 +138,7 @@ class RemoteTransport:
     # -- realtime ---------------------------------------------------------
     def subscribe(self, table: str, match: Dict[str, Any],
                   callback: Callable[[str, Dict[str, Any]], None]) -> Unsubscribe:
-        """Subscribe to row changes. ``callback(event_type, row)``.
+        """Subscribe to row changes. `callback(event_type, row)`.
 
         Implementations may fall back to polling if realtime is unavailable.
         Returns a callable that cancels the subscription.
