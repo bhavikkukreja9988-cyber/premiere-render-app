@@ -15,8 +15,8 @@ app.
      "Bhavik's PC". Use a **different** name on each PC.
    - **Family code** — use the **same** code on every PC in your household.
      PCs with matching codes can send renders to each other.
-   - **Where to store received projects**, and how long to keep them
-     (7 days by default).
+   - **Where to store received projects**, and how long to keep finished
+     or failed jobs before they're deleted automatically (7 days by default).
 3. That's it. You're never asked again. Both can be changed later in
    **Settings → This PC**.
 
@@ -66,6 +66,12 @@ SUPABASE_SETUP.md, step 2).
 On the rendering PC, check **Settings → Render engine**. If it isn't Adobe
 Media Encoder, confirm Media Encoder is installed, then restart FileSender.
 The agent's own log is at `%APPDATA%\FileSender\ame\agent.log`.
+
+**A job is stuck or failed and taking up space.**
+On the rendering PC, open the **Render Station** tab, select the job under
+**Received jobs** and click **Clear selected job**. If it's rendering right
+now, click **Cancel render** first. The sender is told the job was cleared
+and can retry it.
 
 **Media is offline on the rendering PC.**
 The project references files outside the folder that was sent. In Premiere,
