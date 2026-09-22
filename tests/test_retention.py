@@ -60,11 +60,29 @@ class TestRetention(unittest.TestCase):
     def test_never_when_retention_is_zero(self):
         self.assertFalse(eligible_for_deletion(self._record(JobState.COMPLETE), 0))
 
-    def test_protected_states_are_never_deleted(self):
-        for state in (JobState.FAILED, JobState.CANCELLED, JobState.RENDERING,
-                      JobState.TRANSFERRING, JobState.QUEUED, JobState.RETURNING,
-                      JobState.ENCODED, JobState.CREATED):
-            self.assertFalse(eligible_for_deletion(self._record(state), 7), state)
+    def test_in_progress_states_are_never_auto_deleted(self):
+        # Anything not finished stays put no matter how old — it might still
+        # be in use. A genuinely stuck job is cleared by hand instead.
+        for state in (JobState.RENDERING, JobState.TRANSFERRING, JobState.QUEUED,
+                      JobState.RETURNING, JobState.ENCODED, JobState.CREATED):
+            self.assertFalse(eligible_for_deletion(self._record(state, 365), 7),
+                             state)
+
+    def test_failed_and_cancelled_jobs_are_deleted_after_retention(self):
+        # These used to be kept forever and silently filled the drive with
+        # full copies of projects that were never rendered.
+        for state in (JobState.FAILED, JobState.CANCELLED):
+            self.assertTrue(eligible_for_deletion(self._record(state, 10), 7),
+                            state)
+
+    def test_recent_failures_are_kept_for_the_retention_window(self):
+        # The window is the grace period for inspecting what went wrong.
+        for state in (JobState.FAILED, JobState.CANCELLED):
+            self.assertFalse(eligible_for_deletion(self._record(state, 3), 7),
+                             state)
+
+    def test_failed_jobs_follow_never_delete_too(self):
+        self.assertFalse(eligible_for_deletion(self._record(JobState.FAILED, 999), 0))
 
     def test_currently_rendering_job_is_protected(self):
         record = self._record(JobState.COMPLETE, job_id="busy")
@@ -78,17 +96,27 @@ class TestRetention(unittest.TestCase):
             old = store.add(JobRecord(spec=JobSpec(name="old"),
                                       state=JobState.COMPLETE))
             old.completed_at = time.time() - 30 * 86400
-            failed = store.add(JobRecord(spec=JobSpec(name="failed"),
-                                         state=JobState.FAILED))
+            old_failed = store.add(JobRecord(spec=JobSpec(name="old failed"),
+                                             state=JobState.FAILED))
+            old_failed.completed_at = time.time() - 30 * 86400
+            new_failed = store.add(JobRecord(spec=JobSpec(name="new failed"),
+                                             state=JobState.FAILED))
+            new_failed.completed_at = time.time() - 1 * 86400
+            stuck = store.add(JobRecord(spec=JobSpec(name="stuck"),
+                                        state=JobState.RENDERING))
+            stuck.updated_at = time.time() - 90 * 86400
             removed_dirs = []
             manager = RetentionManager(
                 store, root, lambda: 7,
                 lambda job_id: removed_dirs.append(job_id),
                 lambda: None)
             removed = manager.sweep()
-            self.assertEqual(removed, [old.display_label])
+            self.assertEqual(sorted(removed),
+                             sorted([old.display_label, old_failed.display_label]))
             self.assertIsNone(store.get(old.job_id))
-            self.assertIsNotNone(store.get(failed.job_id))
+            self.assertIsNone(store.get(old_failed.job_id))
+            self.assertIsNotNone(store.get(new_failed.job_id))
+            self.assertIsNotNone(store.get(stuck.job_id))
 
 
 if __name__ == "__main__":
