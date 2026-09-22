@@ -1,101 +1,65 @@
 # Supabase setup
 
-This app uses Supabase as the cloud layer that lets a Sender and a Render
-Station talk to each other over the internet — different homes, different
-networks, no port forwarding. This guide connects the app to the Supabase
-project and applies the database, security and storage setup.
+One-time setup of the cloud project that FileSender uses to connect PCs.
 
-You do this once, in the Supabase dashboard. It takes about ten minutes.
+> Never put the **secret key**, **service-role key**, or **database password**
+> in the app, the repo, or these docs. The app only ever uses the public URL
+> and the **publishable** key, which are safe to ship.
 
-> **Secrets:** only the *publishable* key goes in the app (it already is, in
-> `src/remote/config.py`). Never put the **secret key**, **service-role key**,
-> or **database password** in the app, the repo, or these docs.
+## 1. Project details
 
-## 1. The project
-
-Already created:
-
-- **Project:** File Sender
-- **URL:** `https://dyvhlaljbgpyywrofrbg.supabase.co`
-- **Publishable key:** `sb_publishable_...` (already in `src/remote/config.py`)
-
-To point a build at a *different* Supabase project, set environment variables
-before launching — no code change needed:
-
-```
-SUPABASE_URL=https://YOURPROJECT.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_yourkey
-```
+- URL: `https://dyvhlaljbgpyywrofrbg.supabase.co`
+- Publishable key: already built into the app (`src/remote/config.py`).
 
 ## 2. Turn off email confirmation (important)
 
-The app signs users in with a **username and password**. Internally each
-username becomes a synthetic address like `bhavik@filesender.local`, which can
-never receive email. So email confirmation must be off, or logins will hang
-waiting for a confirmation click.
+**Authentication → Providers → Email → turn OFF "Confirm email."**
 
-Dashboard → **Authentication → Providers → Email**:
+There is no login screen in FileSender. Each **family code** silently maps to
+its own internal account with a synthetic address (e.g.
+`family-3f9a…@filesender.local`) that can never receive email. If
+confirmation is left on, the account is created but can never be used, and the
+app will report that it can't connect — permanently, for that family
+code.
 
-- Ensure **Email** is enabled.
-- **Turn OFF “Confirm email.”**
-- Leave phone/OAuth providers off (not used).
+## 3. Run the migrations, in order
 
-## 3. Apply the database migrations
-
-Dashboard → **SQL Editor**, then run each file in
-`supabase/migrations/` **in order**:
+Open **SQL Editor**, paste each file's contents, run it, confirm "Success,"
+then move to the next. **All six are required.**
 
 1. `001_initial_schema.sql` — tables: stations, jobs, job_files, job_events
-2. `002_rls_policies.sql` — Row Level Security (each account sees only its own)
+2. `002_rls_policies.sql` — Row Level Security
 3. `003_realtime.sql` — live updates for presence, jobs and events
-4. `004_storage.sql` — the two private buckets and their access rules
+4. `004_storage.sql` — the two private buckets
+5. `005_authenticated_storage_policies.sql` — storage access for signed-in
+   accounts only, each account limited to its own folder
+6. `006_family_scoped_accounts.sql` — adds device names, family codes and
+   live progress columns, and restores per-account isolation
 
-Paste the contents of each file, run it, confirm “Success,” move to the next.
+**Do not skip 005 or 006.** Without 006, the app tries to write columns that
+don't exist: PCs fail to register, and every station appears offline.
 
-*(Alternatively, with the Supabase CLI: `supabase db push` after linking the
-project. The dashboard method needs no CLI install.)*
+Every migration is safe to run more than once.
 
-## 4. Confirm the buckets
+## 4. Check the buckets
 
-Dashboard → **Storage**. You should see two **private** buckets:
+**Storage** should show two **private** buckets: `project-files` and
+`render-results`. If they're missing, re-run `004_storage.sql`. Do **not**
+make them public.
 
-- `project-files`
-- `render-results`
+## 5. Check realtime
 
-If they aren’t there, re-run `004_storage.sql`. Do **not** make them public.
+**Database → Replication:** `stations`, `jobs` and `job_events` should be in
+the `supabase_realtime` publication. `003_realtime.sql` adds them.
 
-## 5. Confirm Realtime
+## How accounts work
 
-Dashboard → **Database → Replication** (or **Realtime**). The `stations`,
-`jobs` and `job_events` tables should be in the `supabase_realtime`
-publication. `003_realtime.sql` adds them; this is just a visual check.
-
-## 6. How the app uses it
-
-- **Sign in:** username + password. The session is remembered locally so the
-  app signs in silently next time.
-- **A family shares one account.** Everyone who should share render stations
-  signs into the same username/password. Different accounts are fully isolated
-  by RLS — one family can never see another’s stations, jobs or files.
-- **Presence:** while FileSender is open in Render Station mode it sends a
-  heartbeat; the station shows online. Close the app and it goes offline. There
-  is no background server left running.
-- **Transfer:** project files upload to `project-files`, the result MP4 to
-  `render-results`, both under `user/<id>/jobs/<job id>/…`. Cloud files are
-  temporary transport and are removed once the job is delivered.
-
-## 7. What must stay private
-
-Never share or commit:
-
-- the Supabase **secret** / **service-role** key
-- the **database password**
-- anything from **Project Settings → API** labelled secret
-
-The app only ever needs the URL and the publishable key.
-
-## 8. Not yet verified
-
-The cloud code has not been run against the live project from the development
-environment (no network there). The first real test happens on Windows with the
-installed app. See `CHANGE_REPORT.txt` → “requires real testing.”
+- There is no username or password. Each PC is set up once with a **name**
+  and a **family code**.
+- Every PC that types the **same** family code silently signs into the
+  **same** account, so they can see and send to each other.
+- A **different** family code is a completely separate account. Row Level
+  Security enforces this in the database itself — it is not just hidden in
+  the app.
+- Treat the family code like a shared password: anyone who knows it can see
+  your PCs and send them jobs.
