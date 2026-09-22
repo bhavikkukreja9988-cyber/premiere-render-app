@@ -27,8 +27,20 @@ from .log import get_logger
 
 logger = get_logger("core.retention")
 
-#: States that are safe to auto-delete. Deliberately only one.
-DELETABLE_STATES = (JobState.COMPLETE,)
+#: States that are safe to auto-delete once they're older than the retention
+#: window. All three are terminal — the job is finished one way or another and
+#: nothing will touch it again.
+#:
+#: FAILED and CANCELLED used to be excluded so a failure could be inspected.
+#: The retention window itself now provides that grace period (a failed job is
+#: kept for the configured number of days after it failed), and excluding them
+#: meant failed jobs accumulated on the render station forever — silently
+#: filling the drive with full copies of projects that were never rendered.
+#:
+#: Jobs in any non-terminal state (transferring, queued, rendering, encoded,
+#: returning) are never auto-deleted; a job stuck in one of those can be
+#: removed by hand from the Render Station tab.
+DELETABLE_STATES = (JobState.COMPLETE, JobState.FAILED, JobState.CANCELLED)
 
 CHECK_INTERVAL_SECONDS = 300.0        # re-evaluate every 5 minutes
 
