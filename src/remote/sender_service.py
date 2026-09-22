@@ -155,6 +155,7 @@ class RemoteSendWorker(threading.Thread):
             self.on_state("complete", {"job_id": job.id, "path": str(dest)})
         except InterruptedError:
             self.error = "cancelled"
+            self._discard_cloud_files()
             self.on_state("cancelled", {"job_id": self.job_id})
         except (RemoteError, OSError, RuntimeError) as exc:
             message = friendly_message(exc)
@@ -164,13 +165,41 @@ class RemoteSendWorker(threading.Thread):
                     self.client.jobs.set_state(self.job_id, RemoteJobState.FAILED, error=message)
                 except RemoteError:
                     pass
+            self._discard_cloud_files()
             self.on_state("failed", {"job_id": self.job_id, "error": message})
             logger.error("remote job %s failed: %s", self.job_id[:8] or "?", exc)
         except Exception as exc:  # noqa: BLE001
             message = friendly_message(exc)
             self.error = message
+            # Mark it failed so it doesn't sit in "uploading" forever, where
+            # nothing would ever clean it up.
+            if self.job_id:
+                try:
+                    self.client.jobs.set_state(self.job_id, RemoteJobState.FAILED,
+                                               error=message)
+                except Exception:                            # noqa: BLE001
+                    pass
+            self._discard_cloud_files()
             self.on_state("failed", {"job_id": self.job_id, "error": message})
             logger.exception("remote send worker crashed")
+
+    def _discard_cloud_files(self) -> None:
+        """Remove this job's files from Supabase after a failed or cancelled
+        send.
+
+        Retry always starts a NEW job with a fresh upload, so nothing will
+        ever use these files again — left behind, they'd sit in the free
+        plan's 1 GB of storage forever. Best-effort: if the failure was the
+        network going down this will fail too, and the family's background
+        clean-up removes them later instead.
+        """
+        if not self.job_id:
+            return
+        try:
+            self.client.storage.remove_job_objects(self.job_id)
+        except Exception as exc:                            # noqa: BLE001
+            logger.debug("could not remove cloud files for %s yet: %s",
+                         self.job_id[:8], exc)
 
     def _wait_for_result(self, job_id: str) -> RemoteJob:
         consecutive_errors = 0
