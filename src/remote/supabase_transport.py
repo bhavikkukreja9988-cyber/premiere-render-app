@@ -14,6 +14,7 @@ from .transport import (
     NotAuthenticatedError,
     NotFoundError,
     OfflineError,
+    QuotaExceededError,
     RemoteError,
     RemoteTransport,
 )
@@ -33,18 +34,64 @@ def _require_supabase():
         ) from exc
 
 
+
+# Text fragments that identify "couldn't reach the server" failures. Windows
+# and Linux word DNS failures differently ("getaddrinfo failed" vs "Name or
+# service not known"), and httpx wraps them in its own exception types, so
+# both the exception type and its message are checked.
+_NETWORK_MARKERS = (
+    "getaddrinfo", "name or service not known", "nodename nor servname",
+    "temporary failure", "network", "timeout", "timed out", "connection",
+    "connecterror", "unreachable", "no route to host", "errno 11001",
+    "errno 11004", "ssl", "eof occurred",
+)
+
+
+# Plan-limit refusals: file too big (413), storage/bandwidth over quota, or the
+# 402 "fair use" restriction Supabase applies once free limits are exceeded.
+_QUOTA_MARKERS = (
+    "payload too large", "maximum allowed size", "entitytoolarge",
+    "'statuscode': 413", "'statuscode': '413'", "'statuscode': 402",
+    "'statuscode': '402'", "payment required", "quota", "usage limit",
+    "exceed_storage", "exceed_egress",
+)
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    """True if the failure means "couldn't reach Supabase", not "Supabase said no"."""
+    try:
+        import httpx
+        if isinstance(exc, (httpx.TransportError, httpx.TimeoutException)):
+            return True
+    except Exception:                                        # noqa: BLE001
+        pass
+    if isinstance(exc, OSError):
+        return True
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in _NETWORK_MARKERS)
+
 class SupabaseTransport(RemoteTransport):
     def __init__(self, config: RemoteConfig) -> None:
         self.config = config
         self._client = _require_supabase()(config.url, config.publishable_key)
         self._user_id = ""
+        # Kept so an expired session can be renewed silently. These are the
+        # family account's derived credentials, not anything the user typed.
+        self._credentials: Optional[tuple] = None
+        self._reauth_lock = threading.Lock()
 
     def sign_up(self, email: str, password: str) -> Session:
         try:
             res = self._client.auth.sign_up({"email": email, "password": password})
         except Exception as exc:  # noqa: BLE001
+            # A network failure must NOT look like "wrong credentials":
+            # the caller would then wrongly conclude the account is missing.
+            if _is_network_error(exc):
+                raise OfflineError(str(exc)) from exc
             raise AuthError(str(exc)) from exc
-        return self._session_from_auth(res)
+        session = self._session_from_auth(res)
+        self._credentials = (email, password)
+        return session
 
     def sign_in(self, email: str, password: str) -> Session:
         try:
@@ -52,8 +99,12 @@ class SupabaseTransport(RemoteTransport):
                 {"email": email, "password": password}
             )
         except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                raise OfflineError(str(exc)) from exc
             raise AuthError(str(exc)) from exc
-        return self._session_from_auth(res)
+        session = self._session_from_auth(res)
+        self._credentials = (email, password)
+        return session
 
     def restore_session(self, session: Session) -> Session:
         try:
@@ -92,87 +143,112 @@ class SupabaseTransport(RemoteTransport):
         if not self._user_id:
             raise NotAuthenticatedError("no active Supabase session")
 
-    def insert(self, table: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    # -- calls with automatic recovery from an expired session --------------
+    def _run(self, operation: Callable[[], Any]) -> Any:
+        """Run one Supabase call; if the session has expired, renew it and
+        retry once.
+
+        Supabase sessions last about an hour. The client library refreshes
+        them in the background, but if a refresh is missed (PC asleep, Wi-Fi
+        down at the wrong moment) every later call fails with "JWT expired"
+        and — before this — nothing ever recovered: a render station would
+        silently stop working until the app was restarted.
+        """
         self._require_session()
         try:
-            res = self._client.table(table).insert(row).execute()
-        except Exception as exc:  # noqa: BLE001
-            raise self._translate(exc) from exc
+            return operation()
+        except Exception as exc:                            # noqa: BLE001
+            error = self._translate(exc)
+            if isinstance(error, NotAuthenticatedError) and self._reauthenticate():
+                try:
+                    return operation()
+                except Exception as retry_exc:              # noqa: BLE001
+                    raise self._translate(retry_exc) from retry_exc
+            raise error from exc
+
+    def _reauthenticate(self) -> bool:
+        with self._reauth_lock:
+            if not self._credentials:
+                return False
+            email, password = self._credentials
+            try:
+                res = self._client.auth.sign_in_with_password(
+                    {"email": email, "password": password})
+                self._session_from_auth(res)
+                logger.info("cloud session had expired; reconnected")
+                return True
+            except Exception as exc:                        # noqa: BLE001
+                logger.warning("could not renew the cloud session: %s", exc)
+                return False
+
+    def insert(self, table: str, row: Dict[str, Any]) -> Dict[str, Any]:
+        res = self._run(lambda: self._client.table(table).insert(row).execute())
         data = getattr(res, "data", None) or []
         return data[0] if data else row
 
     def update(self, table: str, match: Dict[str, Any], changes: Dict[str, Any]) -> List[Dict[str, Any]]:
-        self._require_session()
-        try:
+        def op():
             query = self._client.table(table).update(changes)
             for key, value in match.items():
                 query = query.eq(key, value)
-            res = query.execute()
-        except Exception as exc:  # noqa: BLE001
-            raise self._translate(exc) from exc
-        return getattr(res, "data", None) or []
+            return query.execute()
+        return getattr(self._run(op), "data", None) or []
 
     def select(self, table: str, match: Optional[Dict[str, Any]] = None,
                order_by: str = "", descending: bool = False) -> List[Dict[str, Any]]:
-        self._require_session()
-        try:
+        def op():
             query = self._client.table(table).select("*")
             for key, value in (match or {}).items():
                 query = query.eq(key, value)
             if order_by:
                 query = query.order(order_by, desc=descending)
-            res = query.execute()
-        except Exception as exc:  # noqa: BLE001
-            raise self._translate(exc) from exc
-        return getattr(res, "data", None) or []
+            return query.execute()
+        return getattr(self._run(op), "data", None) or []
 
     def delete(self, table: str, match: Dict[str, Any]) -> None:
-        self._require_session()
-        try:
+        def op():
             query = self._client.table(table).delete()
             for key, value in match.items():
                 query = query.eq(key, value)
-            query.execute()
-        except Exception as exc:  # noqa: BLE001
-            raise self._translate(exc) from exc
+            return query.execute()
+        self._run(op)
+
+    def server_time(self) -> float:
+        """Supabase's own clock (seconds since 1970), via the ``server_time``
+        database function from migration 007."""
+        res = self._run(lambda: self._client.rpc("server_time").execute())
+        data = getattr(res, "data", None)
+        if isinstance(data, list) and data:
+            data = data[0]
+        if isinstance(data, dict):
+            data = next(iter(data.values()), None)
+        return float(data)
 
     def upload(self, bucket: str, object_path: str, data: bytes,
                on_progress: Optional[Callable[[int, int], None]] = None) -> str:
-        self._require_session()
-        try:
-            self._client.storage.from_(bucket).upload(
-                object_path,
-                data,
-                {
-                    "upsert": "true",
-                    "content-type": "application/octet-stream",
-                    "cache-control": "3600",
-                },
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise self._translate(exc) from exc
+        self._run(lambda: self._client.storage.from_(bucket).upload(
+            object_path,
+            data,
+            {
+                "upsert": "true",
+                "content-type": "application/octet-stream",
+                "cache-control": "3600",
+            },
+        ))
         if on_progress:
             on_progress(len(data), len(data))
         return object_path
 
     def download(self, bucket: str, object_path: str,
                  on_progress: Optional[Callable[[int, int], None]] = None) -> bytes:
-        self._require_session()
-        try:
-            data = self._client.storage.from_(bucket).download(object_path)
-        except Exception as exc:  # noqa: BLE001
-            raise self._translate(exc) from exc
+        data = self._run(lambda: self._client.storage.from_(bucket).download(object_path))
         payload = data or b""
         if on_progress:
             on_progress(len(payload), len(payload))
         return payload
 
     def remove_object(self, bucket: str, object_path: str) -> None:
-        self._require_session()
-        try:
-            self._client.storage.from_(bucket).remove([object_path])
-        except Exception as exc:  # noqa: BLE001
-            raise self._translate(exc) from exc
+        self._run(lambda: self._client.storage.from_(bucket).remove([object_path]))
 
     def list_objects(self, bucket: str, prefix: str) -> List[str]:
         """Recursively list descendant objects below a Storage folder prefix."""
@@ -185,17 +261,14 @@ class SupabaseTransport(RemoteTransport):
             folder = stack.pop()
             offset = 0
             while True:
-                try:
-                    items = self._client.storage.from_(bucket).list(
-                        folder,
-                        {
-                            "limit": STORAGE_PAGE_SIZE,
-                            "offset": offset,
-                            "sortBy": {"column": "name", "order": "asc"},
-                        },
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    raise self._translate(exc) from exc
+                items = self._run(lambda: self._client.storage.from_(bucket).list(
+                    folder,
+                    {
+                        "limit": STORAGE_PAGE_SIZE,
+                        "offset": offset,
+                        "sortBy": {"column": "name", "order": "asc"},
+                    },
+                ))
                 items = items or []
                 if not items:
                     break
@@ -265,7 +338,11 @@ class SupabaseTransport(RemoteTransport):
 
     @staticmethod
     def _translate(exc: Exception) -> RemoteError:
+        if _is_network_error(exc):
+            return OfflineError(str(exc))
         text = str(exc).lower()
+        if any(marker in text for marker in _QUOTA_MARKERS):
+            return QuotaExceededError(str(exc))
         if "jwt" in text or "not authenticated" in text or "invalid token" in text or "401" in text:
             return NotAuthenticatedError(str(exc))
         if "row-level security" in text or "permission denied" in text or "policy" in text or "403" in text:
