@@ -1,0 +1,403 @@
+=====================================================================
+  FILESENDER - SUPABASE CHECKLIST
+  Step-by-step guide to check (and fix) the Supabase cloud account
+=====================================================================
+
+WHAT THIS IS
+  FileSender's PCs talk to each other through one Supabase project.
+  If Supabase isn't set up exactly right, PCs show as "offline",
+  sending fails, or nothing connects at all. This guide checks every
+  part, one step at a time.
+
+HOW LONG
+  About 15 minutes the first time. After that, Step 1 plus Step 6
+  (about 2 minutes) is enough for a quick check.
+
+YOU NEED
+  - A web browser, signed in at https://supabase.com/dashboard
+  - The FileSender repo folder (for the migration files)
+
+HOW TO READ EACH STEP
+  DO        = what to click or type
+  EXPECT    = what you should see if everything is fine
+  IF NOT    = how to fix it
+
+Supabase sometimes renames menu items. If a name here doesn't match
+exactly, look for the closest one - the words in brackets are other
+names the same page has had.
+
+
+---------------------------------------------------------------------
+STEP 1 - IS THE PROJECT AWAKE?                        (do this first)
+---------------------------------------------------------------------
+  Free Supabase projects PAUSE after about 7 days of low activity.
+  A paused project looks exactly like "no internet" to FileSender.
+
+  DO      Open https://supabase.com/dashboard and click your project.
+
+  EXPECT  The project opens normally.
+
+  IF NOT  If you see "Project is paused" (or "Paused"), click
+          "Restore project" and wait until it says it's ready
+          (usually 1-3 minutes). Then restart FileSender on every PC.
+
+  TIP     A running FileSender counts as activity. If at least one PC
+          has FileSender open during each week, it won't pause again.
+
+
+---------------------------------------------------------------------
+STEP 2 - IS IT THE RIGHT PROJECT?
+---------------------------------------------------------------------
+  FileSender is built to connect to ONE specific project:
+
+      Project URL:      https://dyvhlaljbgpyywrofrbg.supabase.co
+      Publishable key:  sb_publishable_CwBt3SKkspj5FTBmAQo9cw_4FJNOFqg
+
+  (Both of these are safe to share - they are public by design.)
+
+  DO      Project Settings (gear icon, bottom left)
+          -> Data API  [also called "API"]         -> Project URL
+          -> API Keys                              -> Publishable key
+
+  EXPECT  Both match the values above exactly.
+
+  IF NOT  You're looking at a different project. Either switch to
+          the right one, or the app's built-in values must be
+          changed in src/remote/config.py and the app rebuilt.
+
+  NEVER   Never put the "secret" key, the "service_role" key, or the
+          database password into the app, the repo, a chat, or a file
+          you share. FileSender never needs them.
+
+
+---------------------------------------------------------------------
+STEP 3 - "CONFIRM EMAIL" MUST BE OFF                     (important)
+---------------------------------------------------------------------
+  FileSender has no login screen. Each family code quietly uses its
+  own account with a made-up address (family-xxxx@filesender.local)
+  that can never receive email. If email confirmation is on, the
+  account gets created but can NEVER be used.
+
+  DO      Authentication -> Sign In / Providers  [also "Providers"]
+          -> Email
+
+  EXPECT  "Confirm email" is switched OFF.
+          "Enable Email provider" (or "Allow email sign-ins") is ON.
+
+  IF NOT  Turn "Confirm email" off and click Save.
+          If a family code was already used while it was on, that
+          account is stuck unconfirmed - go to Step 8 and delete it,
+          then restart FileSender so it creates a fresh one.
+
+  In FileSender's log, this problem looks like:
+      could not create the family account ... check that
+      'Confirm email' is OFF in Supabase
+
+
+---------------------------------------------------------------------
+STEP 4 - RUN ALL SEVEN MIGRATIONS
+---------------------------------------------------------------------
+  The migrations are the files that build FileSender's tables and
+  security rules. They're in the repo folder:
+
+      supabase\migrations\
+
+      001_initial_schema.sql              the tables
+      002_rls_policies.sql                security rules
+      003_realtime.sql                    live updates
+      004_storage.sql                     the two file buckets
+      005_authenticated_storage_policies.sql   file access rules
+      006_family_scoped_accounts.sql      device names, family codes,
+                                          live progress, per-family
+                                          security
+      007_server_clock.sql                one shared clock for all PCs
+                                          (NEW - fixes stations showing
+                                          offline when PC clocks differ)
+
+  Every file is safe to run again, so if you're not sure whether one
+  was run, just run it.
+
+  DO      For EACH file, in order 001 -> 007:
+            1. Open the file in Notepad, press Ctrl+A, then Ctrl+C.
+            2. In Supabase: SQL Editor -> New query  [or the "+" tab]
+            3. Click in the editor, press Ctrl+V.
+            4. Click "Run" (or press Ctrl+Enter).
+
+  EXPECT  "Success. No rows returned" (or similar) for each file.
+
+  IF NOT  Copy the exact red error message and send it for help.
+          Don't skip ahead - later files depend on earlier ones.
+
+  Skipping 006 is the most common mistake: PCs then fail to register
+  and every station shows offline.
+
+
+---------------------------------------------------------------------
+STEP 5 - AUTOMATIC HEALTH CHECK                  (the key step)
+---------------------------------------------------------------------
+  This one query checks almost everything from Steps 4 and 6 at once.
+  It only READS - it doesn't change anything.
+
+  DO      SQL Editor -> New query, paste everything between the
+          two lines below, click Run.
+
+  ------------------------ copy from here ------------------------
+select check_name,
+       case when ok then 'PASS' else 'FAIL  <-- fix' end as result,
+       how_to_fix
+from (values
+  ('01 table: stations',        to_regclass('public.stations')   is not null, 'run 001'),
+  ('02 table: jobs',            to_regclass('public.jobs')       is not null, 'run 001'),
+  ('03 table: job_files',       to_regclass('public.job_files')  is not null, 'run 001'),
+  ('04 table: job_events',      to_regclass('public.job_events') is not null, 'run 001'),
+  ('05 column: stations.family_code', exists (select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'stations' and column_name = 'family_code'), 'run 006'),
+  ('06 column: stations.device_name', exists (select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'stations' and column_name = 'device_name'), 'run 006'),
+  ('07 column: jobs.family_code', exists (select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'jobs' and column_name = 'family_code'), 'run 006'),
+  ('08 column: jobs.progress',  exists (select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'jobs' and column_name = 'progress'), 'run 006'),
+  ('09 security on: stations',  coalesce((select relrowsecurity from pg_class
+        where oid = to_regclass('public.stations')), false), 'run 002 then 006'),
+  ('10 security on: jobs',      coalesce((select relrowsecurity from pg_class
+        where oid = to_regclass('public.jobs')), false), 'run 002 then 006'),
+  ('11 rule: stations_owner_all', exists (select 1 from pg_policies
+        where schemaname = 'public' and policyname = 'stations_owner_all'), 'run 006'),
+  ('12 rule: jobs_owner_all',   exists (select 1 from pg_policies
+        where schemaname = 'public' and policyname = 'jobs_owner_all'), 'run 006'),
+  ('13 no wide-open old rules', not exists (select 1 from pg_policies
+        where schemaname = 'public' and policyname in ('stations_shared_all',
+        'jobs_shared_all', 'job_files_shared_all', 'job_events_shared_all')), 'run 006'),
+  ('14 bucket: project-files (private)', exists (select 1 from storage.buckets
+        where id = 'project-files' and public = false), 'run 004'),
+  ('15 bucket: render-results (private)', exists (select 1 from storage.buckets
+        where id = 'render-results' and public = false), 'run 004'),
+  ('16 file rule: project_files_rw', exists (select 1 from pg_policies
+        where schemaname = 'storage' and policyname = 'project_files_rw'), 'run 005'),
+  ('17 file rule: render_results_rw', exists (select 1 from pg_policies
+        where schemaname = 'storage' and policyname = 'render_results_rw'), 'run 005'),
+  ('18 shared clock: server_time()', to_regprocedure('public.server_time()') is not null, 'run 007'),
+  ('19 shared clock: heartbeat trigger', exists (select 1 from pg_trigger
+        where tgname = 'stations_stamp_last_seen' and not tgisinternal), 'run 007')
+) as checks(check_name, ok, how_to_fix)
+order by check_name;
+  ------------------------- copy to here -------------------------
+
+  EXPECT  19 rows, every one saying PASS.
+
+  IF NOT  Each FAIL row says which migration to run ("run 006").
+          Run it (Step 4), then run this check again.
+
+  Note: this can't check "Confirm email" (Step 3) - that setting
+  isn't stored where SQL can see it. Check it by hand.
+
+
+---------------------------------------------------------------------
+STEP 6 - ARE THE PCs CHECKING IN?
+---------------------------------------------------------------------
+  Open FileSender on the PCs first, wait about 30 seconds, then:
+
+  DO      SQL Editor -> New query, paste, Run:
+
+  ------------------------ copy from here ------------------------
+select device_name,
+       family_code,
+       id as station_id,
+       to_timestamp(last_seen) as last_seen,
+       round(extract(epoch from now()) - last_seen) as seconds_ago,
+       case
+         when extract(epoch from now()) - last_seen <= 45 then 'ONLINE'
+         else 'OFFLINE'
+       end as online_now
+from public.stations
+order by last_seen desc;
+  ------------------------- copy to here -------------------------
+
+  EXPECT  One row for every PC with FileSender open, with:
+            - the name you gave that PC
+            - the SAME family code on every PC in your household
+            - seconds_ago under 45, and online_now = ONLINE
+
+  IF NOT
+    - A PC is missing entirely:
+        That PC isn't connecting. Open its Log tab -> Save log to
+        file, and look for the messages listed in Step 10.
+    - Family codes differ (e.g. "smith family" vs "smith-family"):
+        They are different households to FileSender. Make them
+        identical in Settings -> This PC -> Family code -> Change.
+    - seconds_ago keeps growing past 45 while FileSender is open:
+        That PC's heartbeat isn't reaching Supabase - check its log.
+    - Old rows from PCs you no longer use are harmless; they just
+        stay "offline". (Step 8 shows how to remove them.)
+
+  NOTE    The SQL Editor sees ALL households' rows at once. Inside
+          the app, each PC only ever sees its own family's PCs.
+
+
+---------------------------------------------------------------------
+STEP 7 - STORAGE AND BANDWIDTH (the free plan's real limit)
+---------------------------------------------------------------------
+  THE FREE PLAN LIMITS THAT MATTER FOR VIDEO:
+    - 1 GB of stored files in total.
+      A project has to be fully uploaded before the render PC
+      downloads it, so a project bigger than about 1 GB can't be
+      sent on the free plan at all. FileSender now warns you when
+      you pick a project that big.
+    - 5 GB of downloads per month.
+      The render PC downloading your project AND you downloading the
+      finished video both count. A 2 GB project uses that up in
+      about two sends.
+    - Going over a limit blocks uploads (or everything) until the
+      monthly reset or an upgrade. FileSender now says so plainly
+      instead of a vague error.
+
+  7a. How much is used right now?
+
+  DO      Click your organization name (top left)
+          -> Usage  [or "Billing" -> "Usage"]
+
+  EXPECT  "Storage size" well under 1 GB, "Egress" under 5 GB.
+
+  7b. What is taking up the space?
+
+  DO      SQL Editor -> New query, paste, Run:
+
+  ------------------------ copy from here ------------------------
+select split_part(name, '/', 4) as job_id,
+       bucket_id,
+       count(*) as files,
+       pg_size_pretty(sum(coalesce((metadata->>'size')::bigint, 0))) as size
+from storage.objects
+where bucket_id in ('project-files', 'render-results')
+group by 1, 2
+order by sum(coalesce((metadata->>'size')::bigint, 0)) desc
+limit 20;
+  ------------------------- copy to here -------------------------
+
+  EXPECT  Only jobs that are being sent or rendered right now.
+          Files are temporary: FileSender deletes a job's cloud files
+          once it's delivered, failed or cancelled (about 10 minutes
+          after, for failed/cancelled ones).
+
+  IF NOT  Old jobs still listed after an hour usually mean no PC has
+          had FileSender open since - open it on any PC and wait a
+          few minutes. To remove files by hand: Storage ->
+          project-files -> user -> (folder) -> jobs -> select the
+          job folder -> Delete. Don't delete folders of jobs that are
+          still sending or rendering.
+
+          To see which job a job_id is (and its state):
+            select display_label, status, error
+            from public.jobs where id = 'PASTE-JOB-ID-HERE';
+
+
+---------------------------------------------------------------------
+STEP 8 - ACCOUNTS (tidy-up, optional)
+---------------------------------------------------------------------
+  DO      Authentication -> Users
+
+  EXPECT  One user per family code, named like
+            family-3f9a1c...@filesender.local
+          Older versions of FileSender made users named after a
+          username instead (e.g. bhavik@filesender.local).
+
+  IF      You see old username-style users, they're no longer used.
+          You can delete them: click the user -> "Delete user".
+          This also removes that account's old station and job rows.
+
+  CAREFUL Don't delete a family-... user that PCs are using right
+          now - those PCs would lose their job history. (They'd
+          reconnect automatically as a fresh account on restart.)
+
+
+---------------------------------------------------------------------
+STEP 9 - RECENT JOBS (when a send misbehaves)
+---------------------------------------------------------------------
+  DO      SQL Editor -> New query, paste, Run:
+
+  ------------------------ copy from here ------------------------
+select display_label,
+       status,
+       error,
+       progress_label,
+       round((progress * 100)::numeric) as progress_pct,
+       to_timestamp(created_at) as created,
+       station_id
+from public.jobs
+order by created_at desc
+limit 20;
+  ------------------------- copy to here -------------------------
+
+  WHAT THE "status" COLUMN MEANS
+    created / uploading   the sender is uploading the project
+    uploaded              uploaded; waiting for the render PC
+    waiting_for_station   waiting for someone to click Accept on the
+                          render PC (auto-accept is turned off)
+    downloading           render PC is downloading the project
+    queued / rendering    in Media Encoder's queue / rendering now
+    encoded / uploading_result   render done; sending the video back
+    ready_for_download    video is waiting for the sender to fetch it
+    complete              finished and delivered
+    failed / cancelled    see the "error" column for why
+
+  A job stuck at "uploaded" usually means the render PC isn't
+  online (Step 6) or its family code is different.
+
+
+---------------------------------------------------------------------
+STEP 10 - LOG MESSAGES AND WHAT THEY MEAN
+---------------------------------------------------------------------
+  Get the log: FileSender -> Log tab -> Save log to file.
+  (Or open %APPDATA%\FileSender\logs\app.log)
+
+  "cannot reach the cloud" / "getaddrinfo failed"
+      The PC couldn't reach Supabase. Check the internet, then
+      Step 1 (paused project) and Step 2 (right URL). FileSender
+      keeps retrying by itself - no restart needed.
+
+  "could not create the family account ... 'Confirm email'"
+      Step 3.
+
+  "Supabase refused access" / "row-level security"
+      Security rules missing or out of date - Steps 4 and 5.
+
+  "Could not find the 'family_code' column" (or 'device_name',
+  'progress')
+      Migration 006 wasn't run - Step 4. If it WAS run, paste this
+      into the SQL Editor and click Run, then restart FileSender:
+          notify pgrst, 'reload schema';
+
+  "storage or bandwidth limit has been reached"
+      Step 7.
+
+  "this PC's clock is ... off from the cloud; correcting for it"
+      Just information - FileSender is handling it. (If you see it
+      without migration 007, run 007 so it can.)
+
+  "station ID ... belonged to another account"
+      Just information - happens after changing the family code;
+      FileSender gave the PC a new ID by itself.
+
+  "cloud session had expired; reconnected"
+      Just information - normal after a PC sleeps or runs for hours.
+
+
+---------------------------------------------------------------------
+QUICK CHECK (after the first full run-through)
+---------------------------------------------------------------------
+  1. Dashboard: project not paused                     (Step 1)
+  2. Health check query: 19 x PASS                     (Step 5)
+  3. PCs query: every open PC ONLINE, same family code (Step 6)
+  4. Usage: storage < 1 GB, egress < 5 GB              (Step 7)
+
+
+---------------------------------------------------------------------
+HOW THIS GUIDE WAS CHECKED
+---------------------------------------------------------------------
+  Every table, column, rule, bucket and function name in the SQL
+  above was copied from FileSender's own migration files, and the
+  queries use standard PostgreSQL only. The queries could not be run
+  against a real Supabase project while writing this guide. If one of
+  them shows an error instead of results, copy the error text and
+  send it along - it will be a quick fix.
