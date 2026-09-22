@@ -92,7 +92,7 @@ class SettingsPanel(QWidget):
         retention_row = QHBoxLayout()
         retention_row.addWidget(self.retention, 1)
         retention_row.addWidget(self.retention_custom)
-        station_form.addRow("Delete completed projects after", retention_row)
+        station_form.addRow("Delete finished or failed jobs after", retention_row)
 
         note = QLabel(
             "The station is online automatically while FileSender is open. "
