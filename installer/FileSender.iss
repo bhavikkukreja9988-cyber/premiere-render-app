@@ -75,13 +75,13 @@ begin
   SearchStr := '"' + Key + '"';
   StartPos := Pos(SearchStr, JsonText);
   if StartPos = 0 then Exit;
-  Rest := Copy(JsonText, StartPos + Length(SearchStr), MaxInt);
+  Rest := Copy(JsonText, StartPos + Length(SearchStr), Length(JsonText));
   StartPos := Pos(':', Rest);
   if StartPos = 0 then Exit;
-  Rest := Copy(Rest, StartPos + 1, MaxInt);
+  Rest := Copy(Rest, StartPos + 1, Length(Rest));
   StartPos := Pos('"', Rest);
   if StartPos = 0 then Exit;
-  Rest := Copy(Rest, StartPos + 1, MaxInt);
+  Rest := Copy(Rest, StartPos + 1, Length(Rest));
   EndPos := Pos('"', Rest);
   if EndPos = 0 then Exit;
   Result := Copy(Rest, 1, EndPos - 1);
@@ -161,13 +161,14 @@ begin
   Size := GetDirSize(CachedWorkspaceDir);
   if Size = 0 then Exit;
 
-  Form := CreateCustomForm();
+  { Inno Setup 6.6.0+ signature: the size is fixed when the form is created
+    and ClientWidth/ClientHeight are read-only afterwards. The last two
+    arguments stop the dialog stretching with WizardSizePercent. }
+  Form := CreateCustomForm(ScaleX(420), ScaleY(170), True, True);
   try
-    Form.ClientWidth := ScaleX(420);
-    Form.ClientHeight := ScaleY(170);
     Form.Caption := 'Uninstall FileSender';
-    Form.Position := poScreenCenter;
-    Form.BorderStyle := bsDialog;
+    { No Position/BorderStyle needed: CreateCustomForm already makes a
+      dialog-style form that centres itself when shown. }
 
     InfoLabel := TNewStaticText.Create(Form);
     InfoLabel.Parent := Form;
