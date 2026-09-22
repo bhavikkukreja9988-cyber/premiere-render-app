@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout,
 
 from ..core.config import AppConfig, save_config
 from ..core.log import get_logger
+from ..core.manifest import scan_folder, total_bytes
 from ..core.project_probe import find_external_media, probe_project
 from ..remote.client import RemoteClient
 from ..remote.models import Station
@@ -94,7 +95,7 @@ class DropArea(QLabel):
 class RemoteSenderPanel(QWidget):
     progress_signal = Signal(object)
     state_signal = Signal(str, dict)
-    probe_signal = Signal(object, object, object)   # sequences, error, external
+    probe_signal = Signal(object, object, object, object)   # sequences, error, external, size
 
     def __init__(self, client: RemoteClient, config: AppConfig) -> None:
         super().__init__()
@@ -160,6 +161,11 @@ class RemoteSenderPanel(QWidget):
         self.external_warning.setWordWrap(True)
         self.external_warning.setStyleSheet(f"color: {WARN};")
         layout.addWidget(self.external_warning)
+
+        self.size_warning = QLabel("")
+        self.size_warning.setWordWrap(True)
+        self.size_warning.setStyleSheet(f"color: {WARN};")
+        layout.addWidget(self.size_warning)
 
         # Options ---------------------------------------------------------
         options_box = QGroupBox("Options")
@@ -268,7 +274,7 @@ class RemoteSenderPanel(QWidget):
                       if self.station_combo.itemData(i) == target), -1)
         if index < 0:
             online_ones = [s for s in stations
-                          if s.is_online(self.client.config.station_offline_after)]
+                          if s.is_online(self.client.config.station_offline_after, self._server_now())]
             if len(online_ones) == 1:
                 index = next(i for i in range(self.station_combo.count())
                             if self.station_combo.itemData(i) == online_ones[0].id)
@@ -276,9 +282,19 @@ class RemoteSenderPanel(QWidget):
             self.station_combo.setCurrentIndex(index)
         self._refresh_station_status_only(stations)
 
+    def _server_now(self) -> float:
+        """Supabase's clock, so "online" means the same thing on every PC."""
+        import time
+        if not self.client.signed_in:
+            return time.time()
+        try:
+            return self.client.stations.server_now()
+        except Exception:                                    # noqa: BLE001
+            return time.time()
+
     def _status_marker_plain(self, station: Station) -> str:
         """Plain-text 'Online' / 'Busy' / 'Offline' for the dropdown list."""
-        if not station.is_online(self.client.config.station_offline_after):
+        if not station.is_online(self.client.config.station_offline_after, self._server_now()):
             return "● Offline"
         if station.status == "busy":
             return "● Busy"
@@ -292,7 +308,7 @@ class RemoteSenderPanel(QWidget):
                 f"it the same family code ('{self.config.family_code}') — it "
                 "will appear here automatically.")
             return
-        if not station.is_online(self.client.config.station_offline_after):
+        if not station.is_online(self.client.config.station_offline_after, self._server_now()):
             colour, state = BAD, "Offline"
         elif station.status == "busy":
             colour, state = WARN, "Busy — rendering another job"
@@ -342,7 +358,9 @@ class RemoteSenderPanel(QWidget):
         self._project_validated = False
         self._external_media = []
         self.drop_area.show_selection(f"{root.name}/{relpath}")
+
         self.external_warning.setText("")
+        self.size_warning.setText("")
         if not self.output_name_edit.text().strip():
             self.output_name_edit.setText(Path(relpath).stem)
         self.sequence_combo.clear()
@@ -351,11 +369,16 @@ class RemoteSenderPanel(QWidget):
         def work() -> None:
             info = probe_project(root / relpath)
             external = find_external_media(root / relpath, root)
-            self.probe_signal.emit(info.sequences, info.error, external)
+            try:
+                # Same file list the upload will use (caches/previews skipped).
+                size = total_bytes(scan_folder(root, with_hash=False))
+            except OSError:
+                size = 0
+            self.probe_signal.emit(info.sequences, info.error, external, size)
 
         threading.Thread(target=work, daemon=True, name="probe").start()
 
-    def _on_probe_done(self, sequences, error, external) -> None:
+    def _on_probe_done(self, sequences, error, external, size=0) -> None:
         self.sequence_combo.clear()
         self.sequence_combo.addItems(list(sequences or []))
         if not sequences:
@@ -373,6 +396,22 @@ class RemoteSenderPanel(QWidget):
                 "Station.")
         else:
             self.external_warning.setText("")
+        self.size_warning.setText(self._size_warning_text(size))
+
+    #: Supabase's free plan stores at most 1 GB of files in total. A project
+    #: has to be uploaded completely before the render PC downloads it, so
+    #: anything near that size can't be sent on the free plan.
+    FREE_PLAN_STORAGE_BYTES = 1024 ** 3
+
+    @classmethod
+    def _size_warning_text(cls, size: int) -> str:
+        if not size or size < cls.FREE_PLAN_STORAGE_BYTES * 0.9:
+            return ""
+        return (f"⚠ This project is {size / 1024 ** 3:.1f} GB to upload. "
+                "Supabase's free plan only holds 1 GB of files in total, so "
+                "on the free plan this send will fail when storage fills up. "
+                "It's fine on a paid Supabase plan. To make it smaller, move "
+                "unused footage out of the project folder.")
 
     def _pick_output_dir(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -385,6 +424,7 @@ class RemoteSenderPanel(QWidget):
     def _update_gate(self) -> None:
         station = self._selected_station()
         gate = evaluate_send(
+            now=self._server_now() if self.client.signed_in else None,
             connected=self.client.signed_in,
             setup_complete=self.config.setup_complete,
             project_selected=self._project_root is not None,
