@@ -48,7 +48,7 @@ class OfflineError(RemoteError):
 
 class AuthorizationError(RemoteError):
     user_message = ("Supabase refused access. The database setup may be "
-                    "incomplete — check that all seven migrations were run "
+                    "incomplete — check that all six migrations were run "
                     "(see docs/SUPABASE_CHECKLIST.txt).")
 
 
