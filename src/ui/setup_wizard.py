@@ -91,7 +91,7 @@ class SetupWizard(QDialog):
         seven = next((i for i in range(self.retention.count())
                       if self.retention.itemData(i) == 7), 0)
         self.retention.setCurrentIndex(seven)
-        storage_form.addRow("Delete finished projects after", self.retention)
+        storage_form.addRow("Delete finished or failed jobs after", self.retention)
 
         self.accept_auto = QCheckBox("Accept incoming jobs automatically")
         self.accept_auto.setChecked(True)
