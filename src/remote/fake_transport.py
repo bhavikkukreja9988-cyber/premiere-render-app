@@ -44,6 +44,8 @@ class FakeTransport(RemoteTransport):
         # Toggles for tests that exercise failure handling.
         self.fail_next_upload = False
         self.offline = False
+        # Seconds the simulated Supabase clock runs ahead of this machine.
+        self.server_clock_offset = 0.0
 
     def new_client(self) -> "FakeTransport":
         """A second, independent connection to the same simulated backend.
@@ -73,6 +75,7 @@ class FakeTransport(RemoteTransport):
         clone._subs = self._subs
         clone.fail_next_upload = False
         clone.offline = False
+        clone.server_clock_offset = self.server_clock_offset
         return clone
 
     # -- helpers ----------------------------------------------------------
@@ -144,6 +147,11 @@ class FakeTransport(RemoteTransport):
         return self._session.user_id if self._session else ""
 
     # -- database ---------------------------------------------------------
+    def server_time(self) -> float:
+        with self._lock:
+            self._require_user()
+            return time.time() + self.server_clock_offset
+
     def insert(self, table: str, row: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             user_id = self._require_user()
@@ -156,6 +164,15 @@ class FakeTransport(RemoteTransport):
             if table in JOB_SCOPED_TABLES and self._job_owner(
                     row.get("job_id", "")) != user_id:
                 raise AuthorizationError("cannot attach to another user's job")
+            # Postgres enforces primary keys across ALL rows, including rows
+            # Row Level Security hides from this user. Mirroring that is what
+            # makes a station-ID clash between two family accounts testable.
+            if table in USER_SCOPED_TABLES and "id" in row and any(
+                    existing.get("id") == row["id"]
+                    for existing in self._tables.get(table, [])):
+                raise RemoteError(
+                    'duplicate key value violates unique constraint '
+                    f'"{table}_pkey"')
             self._tables.setdefault(table, []).append(row)
             self._emit(table, "INSERT", row)
             return dict(row)
