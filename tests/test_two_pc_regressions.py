@@ -14,7 +14,7 @@ from src.remote.auth import AuthService
 from src.remote.config import RemoteConfig
 from src.remote.fake_transport import FakeTransport
 from src.remote.jobs import RemoteJobService
-from src.remote.stations import StationService
+from src.remote.stations import StationIdTakenError, StationService
 
 
 def make_config(**over) -> RemoteConfig:
@@ -150,24 +150,27 @@ class TestCrossFamilyIsolation(unittest.TestCase):
         jobs_joneses = RemoteJobService(self.client_joneses, self.remote_config)
         self.assertEqual(jobs_joneses.list_jobs(), [])
 
-    def test_changing_family_code_moves_a_device_to_the_new_family(self):
+    def test_changing_family_code_needs_a_fresh_station_id(self):
+        # Station IDs are unique across the WHOLE database, including rows the
+        # new family's account can't see. Re-using the old ID after a family
+        # code change is refused - this test used to pass only because the
+        # simulated database didn't enforce that, while real Postgres does.
         self.stations_smiths.register("RS-B", "Render PC", "3.0.0",
                                       family_code="smiths", device_name="Render PC")
-        self.assertEqual(len(self.stations_smiths.list_stations()), 1)
-
-        # Simulate Settings -> change family code -> restart: a fresh auth +
-        # station service pair signs into the NEW family's account and
-        # re-registers there.
         client_new = self.cloud.new_client()
-        auth_new = AuthService(client_new, self.remote_config)
-        auth_new.ensure_signed_in("newcode")
+        AuthService(client_new, self.remote_config).ensure_signed_in("newcode")
         stations_new = StationService(client_new, self.remote_config)
-        stations_new.register("RS-B", "Render PC", "3.0.0",
-                              family_code="newcode", device_name="Render PC")
 
-        # The device now lives under the new family entirely; the old
-        # family's account never sees it appear there.
-        self.assertEqual(len(stations_new.list_stations()), 1)
+        with self.assertRaises(StationIdTakenError):
+            stations_new.register("RS-B", "Render PC", "3.0.0",
+                                  family_code="newcode", device_name="Render PC")
+
+        # A fresh ID registers fine and lives only in the new family.
+        stations_new.register("RS-NEW", "Render PC", "3.0.0",
+                              family_code="newcode", device_name="Render PC")
+        self.assertEqual([s.id for s in stations_new.list_stations()], ["RS-NEW"])
+        self.assertEqual([s.id for s in self.stations_smiths.list_stations()],
+                         ["RS-B"])
 
 
 class TestProgressReporting(TwoPCTestCase):
