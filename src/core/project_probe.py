@@ -1,6 +1,6 @@
 """Best-effort reader for Premiere Pro project files.
 
-A ``.prproj`` is a gzip-compressed XML document. We only need the sequence
+A ``prproj`` is a gzip-compressed XML document. We only need the sequence
 names so the sender can pick one from a dropdown instead of typing it, so this
 parser is deliberately forgiving: anything it cannot understand falls back to
 "let the user type the name", and an unreadable project never blocks a send.
@@ -8,6 +8,7 @@ parser is deliberately forgiving: anything it cannot understand falls back to
 
 from __future__ import annotations
 
+import html
 import gzip
 import io
 import re
@@ -165,10 +166,14 @@ def find_external_media(prproj_path: Path, project_root: Path) -> List[str]:
     seen = set()
 
     candidates: List[str] = []
+    # Paths come out of XML, so "&" is stored as "&amp;" (and other characters
+    # as "&#...;"). Without decoding, a file named "Tips & Tricks.mp4" became
+    # "Tips &amp; Tricks.mp4": the warning showed garbled names, and files
+    # genuinely inside the project folder could be flagged as external.
     for match in _FILE_URL_RE.finditer(text):
-        candidates.append(_file_url_to_path(match.group(0)))
+        candidates.append(_file_url_to_path(html.unescape(match.group(0))))
     for match in _WIN_PATH_RE.finditer(text):
-        candidates.append(match.group(0))
+        candidates.append(html.unescape(match.group(0)))
 
     for raw in candidates:
         if len(found) >= _MAX_EXTERNAL_HITS:
