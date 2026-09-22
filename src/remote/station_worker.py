@@ -8,18 +8,21 @@ open; stop() removes its heartbeat and marks the station offline.
 from __future__ import annotations
 
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .. import __version__
 from ..core import workspace
-from ..core.config import AppConfig
+from ..core.config import AppConfig, save_config
 from ..core.jobs import JobRecord, JobSpec, JobState, JobStore
 from ..core.log import get_logger
 from ..core.retention import RetentionManager
 from ..render.pipeline import RenderManager, build_backend
 from .client import RemoteClient
 from .models import RemoteJob, RemoteJobState
+from .stations import StationIdTakenError
 from .transport import RemoteError, friendly_message
 
 logger = get_logger("remote.station_worker")
@@ -80,15 +83,17 @@ class RemoteStationWorker:
             "presets": self._local_presets(),
             "accepts_automatically": self.config.accept_jobs_automatically,
         }
-        self.client.stations.register(
-            self.config.station_id,
-            self.config.device_name or self.config.station_name,
-            app_version=__version__,
-            local_ip=self._local_ip(),
-            capabilities=capabilities,
-            family_code=self.config.family_code,
-            device_name=self.config.device_name or self.config.station_name,
-        )
+        try:
+            self._register(capabilities)
+        except StationIdTakenError:
+            # The old ID is still registered under a previous account (e.g.
+            # the family code was changed). Take a fresh one and keep it.
+            old_id = self.config.station_id
+            self.config.station_id = f"RS-{uuid.uuid4().hex[:8]}"
+            save_config(self.config)
+            logger.info("station ID %s belonged to another account; now %s",
+                        old_id, self.config.station_id)
+            self._register(capabilities)
         self.client.stations.start_heartbeat(self.config.station_id)
         self.manager.start()
         self.retention.start()
@@ -108,6 +113,17 @@ class RemoteStationWorker:
         self.started = True
         logger.info("remote station %s online", self.config.station_id)
         self.on_event("remote_station_online", {"station_id": self.config.station_id})
+
+    def _register(self, capabilities: dict) -> None:
+        self.client.stations.register(
+            self.config.station_id,
+            self.config.device_name or self.config.station_name,
+            app_version=__version__,
+            local_ip=self._local_ip(),
+            capabilities=capabilities,
+            family_code=self.config.family_code,
+            device_name=self.config.device_name or self.config.station_name,
+        )
 
     def stop(self) -> None:
         """Stop all cloud worker activity and mark the station offline."""
@@ -462,27 +478,47 @@ class RemoteStationWorker:
                 logger.debug("cleanup sweep failed: %s", exc)
             self._stop.wait(CLEANUP_POLL_SECONDS)
 
+    #: How long a failed/cancelled/finished job's cloud files are left alone
+    #: before any PC in the family may delete them.
+    CLOUD_ORPHAN_GRACE_SECONDS = 10 * 60
+
     def _sweep_cleanup(self) -> None:
-        """Cloud storage is temporary transport, not permanent storage: once
-        a job is fully delivered, remove its cloud files. The local copy
-        follows the configured retention policy — or is removed immediately
-        if the sender asked for that when the job was sent."""
+        """Cloud storage is temporary transport, never permanent storage.
+
+        Two cases:
+
+        * Jobs this PC rendered that the sender has now received (COMPLETE):
+          remove the cloud files at once. The local copy follows the
+          retention policy, or is removed now if the sender asked for that.
+
+        * ANY finished, failed or cancelled job in the family, whichever PC it
+          was for, once it's been over for a few minutes: remove its cloud
+          files. Before this, a failed or cancelled send (or one rejected by
+          a station, or retried as a new job) left its whole project in
+          Supabase forever — on the free plan's 1 GB, a single failed send
+          could block every future one. The sender also tries to clean up
+          after itself, but can't when the failure was losing the network.
+        """
+        now = time.time()
         for job in self.client.jobs.list_jobs():
-            if job.station_id != self.config.station_id:
+            if self._cloud_cleaned.get(job.id) or not job.state.terminal:
                 continue
-            if job.state is not RemoteJobState.COMPLETE:
-                continue
-            if self._cloud_cleaned.get(job.id):
+            own_delivered = (job.state is RemoteJobState.COMPLETE
+                             and job.station_id == self.config.station_id)
+            finished_at = job.completed_at or job.created_at or 0
+            if not own_delivered and now - finished_at < self.CLOUD_ORPHAN_GRACE_SECONDS:
                 continue
             try:
                 self.client.storage.remove_job_objects(job.id)
             except RemoteError as exc:
-                logger.debug("cloud cleanup failed for %s", job.id[:8], exc)
+                logger.debug("cloud cleanup failed for %s: %s", job.id[:8], exc)
                 continue
             self._cloud_cleaned[job.id] = True
+            if not own_delivered:
+                continue
             local = self.local_store.get(job.id)
             if local and local.spec.delete_after_return:
                 workspace.remove_job_dir(self.config.workspace, job.id)
                 self.local_store.remove(job.id)
                 logger.info("removed local + cloud data for %s (delete "
-                           "requested)", job.id[:8])
+                            "requested)", job.id[:8])
