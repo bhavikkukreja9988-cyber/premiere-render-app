@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .. import __version__
 from ..core import workspace
@@ -58,9 +58,7 @@ class RemoteStationWorker:
             self.local_store,
             config.workspace,
             retention_days_provider=lambda: self.config.retention_days,
-            remove_job_dir=lambda job_id: workspace.remove_job_dir(
-                self.config.workspace, job_id
-            ),
+            remove_job_dir=self._remove_job_everywhere,
             busy_job_provider=lambda: self.manager.current_job,
             on_event=self.on_event,
         )
@@ -246,6 +244,88 @@ class RemoteStationWorker:
             RemoteJobState.CANCELLED,
             message="rejected by the station operator",
         )
+
+    # -- received-jobs management (Render Station tab) --------------------
+    def list_local_jobs(self) -> List[JobRecord]:
+        """Every job this PC has received, newest first."""
+        return sorted(self.local_store.list(),
+                      key=lambda r: r.updated_at or 0, reverse=True)
+
+    def is_active(self, job_id: str) -> bool:
+        """True while a job is being downloaded or rendered right now."""
+        return (job_id == self.manager.current_job
+                or bool(self._downloading.get(job_id)))
+
+    def cancel_job(self, job_id: str) -> Tuple[bool, str]:
+        """Stop the job that is rendering right now.
+
+        Media Encoder checks for cancellation while it works, so the job ends
+        up CANCELLED on its own shortly afterwards — at which point it can be
+        cleared like any other finished job.
+        """
+        if job_id != self.manager.current_job:
+            return False, "That job isn't rendering right now."
+        self.manager.cancel(job_id)
+        logger.info("render cancel requested for %s", job_id[:8])
+        return True, "Cancelling — this can take a few seconds."
+
+    def clear_job(self, job_id: str) -> Tuple[bool, str]:
+        """Delete a received job from this PC and from the cloud.
+
+        Order matters. The cloud is updated FIRST: a job still marked
+        queued/rendering/downloading in the cloud is exactly what the
+        recovery loop re-downloads on its next pass, so clearing only the
+        local copy would make it silently come back. If the cloud can't be
+        reached for a job that is still in progress there, nothing is
+        deleted and the user is told why.
+        """
+        if job_id == self.manager.current_job:
+            return False, ("This job is rendering right now. Cancel it first, "
+                           "then clear it.")
+        if self._downloading.get(job_id):
+            return False, ("This job is still downloading. Wait for it to "
+                           "finish, then clear it.")
+
+        # 1. Cloud: stop it being picked up again, and tell the sender.
+        try:
+            remote = self.client.jobs.get_job(job_id)
+        except RemoteError as exc:
+            return False, ("Couldn't reach the cloud, so nothing was deleted "
+                           f"(it could be downloaded again). {friendly_message(exc)}")
+        if remote is not None and not remote.state.terminal:
+            try:
+                # FAILED rather than CANCELLED: the sender then shows the
+                # reason together with its Retry button.
+                self.client.jobs.set_state(
+                    job_id, RemoteJobState.FAILED,
+                    error=("Cleared on the render station "
+                           f"({self.config.device_name or self.config.station_name})."),
+                    message="cleared by the station operator")
+            except RemoteError as exc:
+                return False, ("Couldn't update the cloud, so nothing was "
+                               f"deleted. {friendly_message(exc)}")
+
+        # 2. Local + cloud files.
+        self.pending_manual.pop(job_id, None)
+        self._remove_job_everywhere(job_id)
+        self.local_store.remove(job_id)
+        logger.info("cleared job %s by hand", job_id[:8])
+        self.on_event("job_cleared", {"job_id": job_id})
+        return True, "Job cleared."
+
+    def _remove_job_everywhere(self, job_id: str) -> None:
+        """Delete a job's local folder and its cloud files.
+
+        Used by both hand-clearing and the retention sweep. The cloud part is
+        best-effort: a failure there is logged, never raised — local disk
+        space is the thing the user is actually trying to get back.
+        """
+        workspace.remove_job_dir(self.config.workspace, job_id)
+        try:
+            self.client.storage.remove_job_objects(job_id)
+            self._cloud_cleaned[job_id] = True
+        except RemoteError as exc:
+            logger.debug("cloud file cleanup for %s failed: %s", job_id[:8], exc)
 
     def _accept_and_download(self, job: RemoteJob) -> None:
         self._downloading[job.id] = True
