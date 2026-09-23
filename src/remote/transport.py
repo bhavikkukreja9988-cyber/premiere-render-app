@@ -138,7 +138,7 @@ class RemoteTransport:
     # -- realtime ---------------------------------------------------------
     def subscribe(self, table: str, match: Dict[str, Any],
                   callback: Callable[[str, Dict[str, Any]], None]) -> Unsubscribe:
-        """Subscribe to row changes. `callback(event_type, row)`.
+        """Subscribe to row changes. ``callback(event_type, row)``.
 
         Implementations may fall back to polling if realtime is unavailable.
         Returns a callable that cancels the subscription.
