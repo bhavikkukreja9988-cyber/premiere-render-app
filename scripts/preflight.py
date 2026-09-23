@@ -4,7 +4,7 @@ Run this before building the installer. It checks, one by one, that everything
 needed is present and prints a clear PASS/FAIL for each, with exactly what to do
 about any failure. It never changes anything — it only looks.
 
-    python scripts\\preflight.py
+    python scripts\preflight.py
 """
 
 from __future__ import annotations
@@ -36,7 +36,8 @@ def check_windows() -> bool:
         return line(GREEN, "Running on Windows")
     return line(
         RED, "Not running on Windows",
-        "The installer can only be built on a Windows PC.\n"
+        "The installer can only be built on a Windows PC.
+"
         "Copy this project to a Windows machine and run the build there.")
 
 
@@ -46,7 +47,8 @@ def check_python() -> bool:
         return line(GREEN, f"Python {major}.{minor} detected")
     return line(
         RED, f"Python {major}.{minor} is too old",
-        "Install Python 3.10 or newer from https://www.python.org/downloads/\n"
+        "Install Python 3.10 or newer from https://www.python.org/downloads/
+"
         "During install, tick 'Add python.exe to PATH'.")
 
 
@@ -67,7 +69,8 @@ def check_module(mod: str, install_hint: str) -> bool:
     except ImportError:
         return line(
             YELLOW, f"Python package '{mod}' is not installed yet",
-            f"The build script installs it automatically. To do it by hand:\n"
+            f"The build script installs it automatically. To do it by hand:
+"
             f"    pip install {install_hint}")
 
 
@@ -78,7 +81,8 @@ def check_pyside6() -> bool:
     except ImportError:
         return line(
             YELLOW, "PySide6 is not installed yet",
-            "The build script installs it automatically. To do it by hand:\n"
+            "The build script installs it automatically. To do it by hand:
+"
             "    pip install PySide6")
 
 
@@ -95,9 +99,12 @@ def check_inno() -> bool:
         return line(GREEN, "Inno Setup compiler (ISCC) found", found)
     return line(
         RED, "Inno Setup is not installed",
-        "The installer is built with Inno Setup 6 (free).\n"
-        "1. Download it from https://jrsoftware.org/isdl.php\n"
-        "2. Install it (default options are fine).\n"
+        "The installer is built with Inno Setup 6 (free).
+"
+        "1. Download it from https://jrsoftware.org/isdl.php
+"
+        "2. Install it (default options are fine).
+"
         "3. Re-run this check.")
 
 
@@ -107,7 +114,8 @@ def check_agent_present() -> bool:
         return line(GREEN, "Media Encoder agent script is present")
     return line(
         RED, "Media Encoder agent script is missing",
-        f"Expected at: {agent}\n"
+        f"Expected at: {agent}
+"
         "The project is incomplete; re-extract it from the ZIP.")
 
 
@@ -118,7 +126,8 @@ def check_spec_present() -> bool:
     if ok:
         return line(GREEN, "Installer scripts are present")
     return line(RED, "Installer scripts are missing",
-                f"Expected: {spec}\n          {iss}")
+                f"Expected: {spec}
+          {iss}")
 
 
 def check_icon_present() -> bool:
@@ -127,9 +136,44 @@ def check_icon_present() -> bool:
         return line(GREEN, "App icon is present")
     return line(
         RED, "App icon is missing",
-        f"Expected at: {icon}\n"
+        f"Expected at: {icon}
+"
         "The Inno Setup build step will fail without it. Re-extract the "
         "project or restore assets/FileSender.ico.")
+
+
+def check_python_files_intact() -> bool:
+    """Every .py file must at least be valid Python.
+
+    A damaged file (usually from copying/pasting code instead of copying the
+    file itself, e.g. through a web editor) otherwise only shows up minutes
+    later as a confusing test-import error. This names the exact file and
+    line straight away.
+    """
+    problems = []
+    for folder in ("src", "tests", "scripts"):
+        for path in sorted((REPO_ROOT / folder).rglob("*.py")):
+            try:
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                problems.append(f"{path.relative_to(REPO_ROOT)}: can't read ({exc})")
+                continue
+            try:
+                compile(source, str(path), "exec")
+            except SyntaxError as exc:
+                problems.append(f"{path.relative_to(REPO_ROOT)} line {exc.lineno}: "
+                                f"{exc.msg}")
+    if not problems:
+        return line(GREEN, "All Python files are intact")
+    return line(
+        RED, "Damaged Python file(s) - the build would fail",
+        "
+".join(problems) + "
+"
+        "This almost always means a file was changed while being copied "
+        "(for example code pasted into GitHub's web editor instead of the "
+        "file being uploaded). Copy the file again from the update zip, "
+        "unchanged, then run this again.")
 
 
 def main() -> int:
@@ -147,15 +191,16 @@ def main() -> int:
         check_agent_present(),
         check_spec_present(),
         check_icon_present(),
+        check_python_files_intact(),
     ]
     print("-" * 64)
     if all(checks):
         print("All required checks passed. You can build the installer:")
-        print("    scripts\\build_installer.bat")
+        print("    scripts\build_installer.bat")
         return 0
     print("One or more required checks FAILED (see [FAIL] lines above).")
     print("Fix those, then run this check again:")
-    print("    python scripts\\preflight.py")
+    print("    python scripts\preflight.py")
     return 1
 
 
