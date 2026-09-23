@@ -4,7 +4,7 @@ Run this before building the installer. It checks, one by one, that everything
 needed is present and prints a clear PASS/FAIL for each, with exactly what to do
 about any failure. It never changes anything — it only looks.
 
-    python scripts\preflight.py
+    python scripts\\preflight.py
 """
 
 from __future__ import annotations
@@ -184,11 +184,11 @@ def main() -> int:
     print("-" * 64)
     if all(checks):
         print("All required checks passed. You can build the installer:")
-        print("    scripts\build_installer.bat")
+        print("    scripts\\build_installer.bat")
         return 0
     print("One or more required checks FAILED (see [FAIL] lines above).")
     print("Fix those, then run this check again:")
-    print("    python scripts\preflight.py")
+    print("    python scripts\\preflight.py")
     return 1
 
 
