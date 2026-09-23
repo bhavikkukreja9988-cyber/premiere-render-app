@@ -382,7 +382,7 @@ class TestWindowsLinksCrossPlatform(unittest.TestCase):
         xml = ("<M><ActualMediaFilePath>D:\\\\Footage\\\\Q&amp;A clip.mp4"
                "</ActualMediaFilePath></M>")
         self.assertEqual(_media_path_candidates(xml),
-                         ["D:\\\\Footage\\\\Q&A clip.mp4"])
+                         ["D:\\Footage\\Q&A clip.mp4"])
 
     def test_no_percent_encoded_path_ever_comes_out_of_a_link(self):
         from src.core.project_probe import _media_path_candidates
