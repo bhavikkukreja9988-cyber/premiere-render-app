@@ -334,7 +334,7 @@ class TestAmpersandPaths(unittest.TestCase):
         return path.as_posix().replace(" ", "%20").replace("&", "&amp;")
 
     def make_project(self, root, media_path):
-        # Premiere writes media locations as file:// links (or C:\ paths).
+        # Premiere writes media locations as file:// links (or C:\\ paths).
         xml = (f"<PremiereData><Media><ActualMediaFilePath>file://{media_path}"
                "</ActualMediaFilePath></Media></PremiereData>").encode()
         prproj = root / "Edit.prproj"
