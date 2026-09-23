@@ -358,7 +358,6 @@ class RemoteSenderPanel(QWidget):
         self._project_validated = False
         self._external_media = []
         self.drop_area.show_selection(f"{root.name}/{relpath}")
-
         self.external_warning.setText("")
         self.size_warning.setText("")
         if not self.output_name_edit.text().strip():
@@ -388,8 +387,7 @@ class RemoteSenderPanel(QWidget):
         self._project_validated = True
         if self._external_media:
             names = ", ".join(Path(p).name for p in self._external_media[:5])
-            more = f" and {len(self._external_media) - 5} more" if \
-                len(self._external_media) > 5 else ""
+            more = f" and {len(self._external_media) - 5} more" if                 len(self._external_media) > 5 else ""
             self.external_warning.setText(
                 "⚠ This project references media outside the selected folder "
                 f"({names}{more}). Those files may be offline on the Render "
