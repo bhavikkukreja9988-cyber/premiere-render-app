@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -11,8 +12,9 @@ from typing import Optional
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QFont, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
-    QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
+    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 from .. import __version__
@@ -179,6 +181,21 @@ class LogPanel(QWidget):
         open_in_file_manager(folder)
 
 
+def _scrollable(widget: QWidget) -> QScrollArea:
+    """Put a tall panel inside a scroll area.
+
+    Without this, a tab's full content height becomes the window's minimum
+    height: the window can't be made shorter than the tallest tab, and on a
+    screen that isn't tall enough Qt squashes the rows until the text
+    overlaps (what happened to the Settings tab).
+    """
+    area = QScrollArea()
+    area.setWidget(widget)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    return area
+
+
 def _try_build_remote_client(config: AppConfig):
     try:
         from ..remote.client import build_remote_client
@@ -189,6 +206,13 @@ def _try_build_remote_client(config: AppConfig):
 
 
 class MainWindow(QMainWindow):
+    # Emitted from the background connection thread; Qt delivers it on the
+    # UI thread, which is where the station worker and widgets must be touched.
+    _connect_finished = Signal(bool)
+
+    #: Retry delays after a failed connection attempt, in seconds.
+    RETRY_DELAYS = (5, 10, 20, 30, 60)
+
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.config = config
@@ -204,9 +228,15 @@ class MainWindow(QMainWindow):
         self.remote_worker = None
         self.remote_sender_panel: Optional[RemoteSenderPanel] = None
 
+        self._connecting = False
+        self._retry_index = 0
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(self._connect_async)
+        self._connect_finished.connect(self._on_connect_finished)
+
         if self.remote_client is not None:
             self._bootstrap_cloud()
-            self._start_remote_station_if_signed_in()
             self.remote_sender_panel = RemoteSenderPanel(
                 self.remote_client, config
             )
@@ -225,7 +255,7 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         if self.remote_sender_panel is not None:
-            tabs.addTab(self.remote_sender_panel, "Send a project")
+            tabs.addTab(_scrollable(self.remote_sender_panel), "Send a project")
         else:
             unavailable = QLabel(
                 "Cloud features could not be initialized. Rebuild the installer "
@@ -234,9 +264,9 @@ class MainWindow(QMainWindow):
             unavailable.setWordWrap(True)
             unavailable.setObjectName("hint")
             tabs.addTab(unavailable, "Send a project")
-        tabs.addTab(self.remote_station_panel, "Render Station")
+        tabs.addTab(_scrollable(self.remote_station_panel), "Render Station")
         tabs.addTab(self.history_panel, "Job history")
-        tabs.addTab(self.settings_panel, "Settings")
+        tabs.addTab(_scrollable(self.settings_panel), "Settings")
         tabs.addTab(self.log_panel, "Log")
         self.tabs = tabs
 
@@ -254,6 +284,12 @@ class MainWindow(QMainWindow):
         self._bind_timer.timeout.connect(self._bind_history)
         self._bind_timer.start(1500)
 
+        # Connect in the background so a slow or missing network never freezes
+        # the window, and keep retrying: the first attempt often fails when
+        # FileSender starts with Windows, before Wi-Fi is up.
+        if self.remote_client is not None:
+            QTimer.singleShot(0, self._connect_async)
+
     def _bootstrap_cloud(self) -> None:
         """Set up this device, then connect silently.
 
@@ -265,11 +301,47 @@ class MainWindow(QMainWindow):
         # if an older install predates them (upgrade path).
         if self.config.first_run or not self.config.setup_complete:
             SetupWizard(self.config, self).exec()
+        # The actual connection happens in _connect_async, in the background.
 
-        if self.remote_client is None:
+    # -- cloud connection -------------------------------------------------------
+    def _connect_async(self) -> None:
+        """Try to connect on a background thread (never blocks the UI)."""
+        if self.remote_client is None or self._connecting:
             return
-        if not self.remote_client.auth.ensure_signed_in(self.config.family_code):
-            logger.warning("could not connect to the cloud on startup")
+        if self.remote_client.signed_in:
+            self._on_connect_finished(True)
+            return
+        self._connecting = True
+        self._update_status_bar()
+        family_code = self.config.family_code
+
+        def attempt() -> None:
+            try:
+                ok = self.remote_client.auth.ensure_signed_in(family_code)
+            except Exception:                                # noqa: BLE001
+                logger.exception("unexpected error while connecting")
+                ok = False
+            self._connect_finished.emit(ok)
+
+        threading.Thread(target=attempt, name="cloud-connect",
+                         daemon=True).start()
+
+    def _on_connect_finished(self, ok: bool) -> None:
+        self._connecting = False
+        if ok:
+            if self._retry_index:
+                logger.info("connected to the cloud")
+            self._retry_index = 0
+            if self.remote_worker is None:
+                self._start_remote_station_if_signed_in()
+                self.pending_panel.set_worker(self.remote_worker)
+        else:
+            delay = self.RETRY_DELAYS[min(self._retry_index,
+                                          len(self.RETRY_DELAYS) - 1)]
+            self._retry_index += 1
+            logger.info("not connected; retrying in %ss", delay)
+            self._retry_timer.start(delay * 1000)
+        self._update_status_bar()
 
     def _start_remote_station_if_signed_in(self) -> None:
         if self.remote_client is None or not self.remote_client.signed_in:
@@ -301,17 +373,15 @@ class MainWindow(QMainWindow):
         if self.remote_client is None:
             self.statusBar().showMessage("Cloud connection unavailable.")
         elif self.remote_client.signed_in:
-            station_bit = (
-                f" · Render Station: {self.config.station_name}"
-                if self.remote_worker else ""
-            )
+            station_bit = " · Render Station online" if self.remote_worker else ""
             self.statusBar().showMessage(
-                f"Signed in as {self.remote_client.auth.username}{station_bit}"
-            )
+                f"Connected · This PC: {self.config.device_name}{station_bit}")
+        elif self._connecting:
+            self.statusBar().showMessage("Connecting to the cloud…")
         else:
             self.statusBar().showMessage(
-                "Not signed in — sign in to use remote sending."
-            )
+                "Not connected to the cloud — retrying automatically. "
+                "Check your internet connection.")
 
     def _bind_history(self) -> None:
         store = self.remote_worker.local_store if self.remote_worker else None
@@ -319,6 +389,7 @@ class MainWindow(QMainWindow):
             self.history_panel.bind_store(store)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._retry_timer.stop()
         if self.remote_worker is not None:
             try:
                 self.remote_worker.stop()
