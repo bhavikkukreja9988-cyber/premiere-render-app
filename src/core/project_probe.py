@@ -146,6 +146,35 @@ def _file_url_to_path(url: str) -> str:
     return raw
 
 
+def _media_path_candidates(text: str) -> List[str]:
+    """Media file paths mentioned in a project's XML, decoded.
+
+    Two things this has to get right:
+
+    * Paths come out of XML, so "&" is stored as "&amp;" (and other
+      characters as "&#...;"). Without decoding, "Tips & Tricks.mp4" became
+      "Tips &amp; Tricks.mp4" — garbled names in the warning, and files
+      really inside the project folder flagged as external.
+
+    * A file:// link such as file:///C:/My%20Clips/a.mov ALSO contains
+      something that looks like a Windows path (C:/My%20Clips/a.mov). That
+      inner match must be skipped: it still has "%20" instead of spaces, so
+      it points at a folder that doesn't exist and was wrongly reported as
+      external media. The link itself is decoded properly instead.
+    """
+    candidates: List[str] = []
+    url_spans = []
+    for match in _FILE_URL_RE.finditer(text):
+        url_spans.append(match.span())
+        candidates.append(_file_url_to_path(html.unescape(match.group(0))))
+    for match in _WIN_PATH_RE.finditer(text):
+        start = match.start()
+        if any(url_start <= start < url_end for url_start, url_end in url_spans):
+            continue
+        candidates.append(html.unescape(match.group(0)))
+    return candidates
+
+
 def find_external_media(prproj_path: Path, project_root: Path) -> List[str]:
     """Return likely-external absolute media paths referenced by the project.
 
@@ -165,15 +194,7 @@ def find_external_media(prproj_path: Path, project_root: Path) -> List[str]:
     found: List[str] = []
     seen = set()
 
-    candidates: List[str] = []
-    # Paths come out of XML, so "&" is stored as "&amp;" (and other characters
-    # as "&#...;"). Without decoding, a file named "Tips & Tricks.mp4" became
-    # "Tips &amp; Tricks.mp4": the warning showed garbled names, and files
-    # genuinely inside the project folder could be flagged as external.
-    for match in _FILE_URL_RE.finditer(text):
-        candidates.append(_file_url_to_path(html.unescape(match.group(0))))
-    for match in _WIN_PATH_RE.finditer(text):
-        candidates.append(html.unescape(match.group(0)))
+    candidates = _media_path_candidates(text)
 
     for raw in candidates:
         if len(found) >= _MAX_EXTERNAL_HITS:
