@@ -31,6 +31,7 @@ class SettingsPanel(QWidget):
         self._load()
         self._backend_timer = QTimer(self)
         self._backend_timer.timeout.connect(self._refresh_backend_status)
+        self._backend_timer.timeout.connect(self._refresh_account_label)
         self._backend_timer.start(3000)
         self._refresh_backend_status()
 
@@ -63,8 +64,6 @@ class SettingsPanel(QWidget):
 
         station_box = QGroupBox("Render Station")
         station_form = QFormLayout(station_box)
-        self.station_name = QLineEdit()
-        station_form.addRow("Station name", self.station_name)
 
         self.station_role_enabled = QCheckBox("This PC can receive and render projects")
         station_form.addRow("Role", self.station_role_enabled)
@@ -133,8 +132,6 @@ class SettingsPanel(QWidget):
         out_row.addWidget(self.output_dir, 1)
         out_row.addWidget(out_browse)
         sender_form.addRow("Output folder", out_row)
-        self.sender_name = QLineEdit()
-        sender_form.addRow("Sender name", self.sender_name)
         self.last_station = QLabel("Remembered automatically")
         self.last_station.setObjectName("hint")
         sender_form.addRow("Render Station", self.last_station)
@@ -167,7 +164,6 @@ class SettingsPanel(QWidget):
         c = self.config
         self.device_name.setText(c.device_name)
         self.family_code.setText(c.family_code)
-        self.station_name.setText(c.station_name)
         self.station_role_enabled.setChecked(c.station_role_enabled)
         self.storage_dir.setText(c.workspace_dir)
         self._set_retention(c.retention_days)
@@ -176,7 +172,6 @@ class SettingsPanel(QWidget):
         self.accept_automatically.setChecked(c.accept_jobs_automatically)
         self.station_id_label.setText(c.station_id)
         self.output_dir.setText(c.output_dir)
-        self.sender_name.setText(c.sender_name)
         self.start_with_windows.setChecked(c.start_with_windows)
         self.delete_remote_after_return.setChecked(c.delete_remote_after_return)
         self.log_level.setCurrentText(c.log_level)
@@ -226,7 +221,10 @@ class SettingsPanel(QWidget):
     def _save(self) -> None:
         c = self.config
         c.device_name = self.device_name.text().strip() or c.device_name
-        c.station_name = self.station_name.text().strip() or c.station_name
+        # One name per PC. Station and sender names used to be separate
+        # fields holding the same value; they now simply follow it.
+        c.station_name = c.device_name
+        c.sender_name = c.device_name
         c.station_role_enabled = self.station_role_enabled.isChecked()
         c.workspace_dir = self.storage_dir.text().strip() or c.workspace_dir
         c.retention_days = self._current_retention_days()
@@ -234,7 +232,6 @@ class SettingsPanel(QWidget):
         c.default_preset = self.default_preset.text().strip()
         c.accept_jobs_automatically = self.accept_automatically.isChecked()
         c.output_dir = self.output_dir.text().strip() or c.output_dir
-        c.sender_name = self.sender_name.text().strip() or c.sender_name
         c.start_with_windows = self.start_with_windows.isChecked()
         c.delete_remote_after_return = self.delete_remote_after_return.isChecked()
         c.log_level = self.log_level.currentText()
