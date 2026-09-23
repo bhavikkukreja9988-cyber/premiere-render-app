@@ -1,6 +1,6 @@
 """The transport abstraction.
 
-Every remote operation the app needs is declared here. Two
+Every remote operation the app needs is declared here as an interface. Two
 implementations exist:
 
   * ``SupabaseTransport`` — the real one, talking to Supabase over HTTPS.
@@ -73,7 +73,7 @@ def friendly_message(exc: Exception) -> str:
     ("Render Station is offline...") that is unrelated to whatever raw text the
     exception was constructed with. Other exceptions raised in this codebase
     are already written in plain English, so their `str()` is used as-is.
-    Always prefer this over `str(exc)` anywhere the text might reach a user.
+    Always prefer this over ``str(exc)`` anywhere the text might reach a user.
     """
     return getattr(exc, "user_message", None) or str(exc)
 
