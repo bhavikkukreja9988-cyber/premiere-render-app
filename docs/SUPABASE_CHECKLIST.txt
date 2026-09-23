@@ -204,12 +204,11 @@ STEP 6 - ARE THE PCs CHECKING IN?
 select device_name,
        family_code,
        id as station_id,
-       to_timestamp(last_seen) as last_seen,
-       round(extract(epoch from now()) - last_seen) as seconds_ago,
-       case
-         when extract(epoch from now()) - last_seen <= 45 then 'ONLINE'
-         else 'OFFLINE'
-       end as online_now
+       status,
+       to_timestamp(last_seen) as last_heartbeat,
+       round((extract(epoch from now()) - last_seen)::numeric) as seconds_ago,
+       case when extract(epoch from now()) - last_seen <= 45
+            then 'ONLINE' else 'offline' end as online_now
 from public.stations
 order by last_seen desc;
   ------------------------- copy to here -------------------------
