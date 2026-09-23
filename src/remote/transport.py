@@ -72,7 +72,7 @@ def friendly_message(exc: Exception) -> str:
     ``RemoteError`` and its subclasses carry a curated ``user_message``
     ("Render Station is offline...") that is unrelated to whatever raw text the
     exception was constructed with. Other exceptions raised in this codebase
-    are already written in plain English, so their `str()` is used as-is.
+    are already written in plain English, so their ``str()`` is used as-is.
     Always prefer this over ``str(exc)`` anywhere the text might reach a user.
     """
     return getattr(exc, "user_message", None) or str(exc)
