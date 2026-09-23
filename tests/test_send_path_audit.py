@@ -391,5 +391,6 @@ class TestWindowsLinksCrossPlatform(unittest.TestCase):
             self.assertNotIn("%20", path)
 
 
-if __name__ == "__main__"
+
+if __name__ == "__main__":
     unittest.main()
