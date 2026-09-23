@@ -25,7 +25,7 @@ logger = get_logger("ui.remote_station")
 
 
 class RemoteStationPanel(QWidget):
-    """Simple cloud station status/control; no LAN controls."""
+    """Simple cloud station status and settings; no LAN controls."""
 
     def __init__(self, config: AppConfig, get_worker=None) -> None:
         super().__init__()
