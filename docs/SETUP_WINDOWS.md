@@ -21,8 +21,8 @@ app.
    **Settings → This PC**.
 
 Every PC can both send and receive — there's no separate "sender" or
-"station" mode. Opening FileSender puts the PC online; closing it takes the
-PC offline.
+"station" mode. Opening FileSender puts the PC online; closing it takes it
+offline.
 
 ## PCs that will render
 
