@@ -25,14 +25,14 @@ logger = get_logger("ui.remote_station")
 
 
 class RemoteStationPanel(QWidget):
-    """Simple cloud station status and settings; no LAN controls."""
+    """Simple cloud station status/control and settings; no LAN controls."""
 
     def __init__(self, config: AppConfig, get_worker=None) -> None:
         super().__init__()
         self.config = config
         self._get_worker = get_worker
-        self._worker = None                 # latest worker seen by _refresh
-        self._size_cache = {}               # job_id -> (checked_at, text)
+        self._worker = None
+        self._size_cache = {}
         self._build()
         self._load()
         self._timer = QTimer(self)
@@ -98,7 +98,7 @@ class RemoteStationPanel(QWidget):
         outer.addStretch(1)
 
     def _load(self) -> None:
-        self.station_name_label.setText(self.config.station_name)
+        self.station_name_label.setText(self.config.device_name or self.config.station_name)
         self.station_id_label.setText(self.config.station_id)
         self.ip_label.setText(local_ip())
         self.accept_check.setChecked(self.config.accept_jobs_automatically)
@@ -115,7 +115,9 @@ class RemoteStationPanel(QWidget):
         worker = self._get_worker() if self._get_worker else None
         self._refresh_jobs(worker)
         if worker is None or not getattr(worker, "started", False):
-            self.status_label.setText(f"<span style='color:{MUTED}'>Offline</span>")
+            self.status_label.setText(
+                f"<span style='color:{MUTED}'>Offline — waiting to connect "
+                "to the cloud</span>")
             self.engine_label.setText("—")
             self.current_job_label.setText("Idle")
             return
@@ -129,7 +131,7 @@ class RemoteStationPanel(QWidget):
         self.status_label.setText(f"<span style='color:{colour}'>● {state}</span>")
         self.engine_label.setText(engine)
         self.current_job_label.setText(text)
-        self.station_name_label.setText(self.config.station_name)
+        self.station_name_label.setText(self.config.device_name or self.config.station_name)
         self.station_id_label.setText(self.config.station_id)
         self.ip_label.setText(local_ip())
 
@@ -301,7 +303,7 @@ class RemoteStationPanel(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
-        ok, message = worker.cancel_job(job_id)
+        _ok, message = worker.cancel_job(job_id)
         self.jobs_hint.setText(message)
 
     def _clear_selected(self) -> None:
