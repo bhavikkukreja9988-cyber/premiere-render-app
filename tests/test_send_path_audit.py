@@ -364,5 +364,32 @@ class TestAmpersandPaths(unittest.TestCase):
             self.assertNotIn("&amp;", hits[0])
 
 
+class TestWindowsLinksCrossPlatform(unittest.TestCase):
+    """Checks the path extraction itself, so it runs identically on Windows
+    and Linux. The Windows-only failure was a C:/ path pattern matching
+    INSIDE a file:///C:/... link, producing a second, undecoded path with
+    "%20" in it that pointed at a folder that doesn't exist."""
+
+    def test_windows_file_link_yields_one_decoded_path(self):
+        from src.core.project_probe import _media_path_candidates
+        xml = ("<M><ActualMediaFilePath>file:///C:/Users/bhavi/"
+               "Tips%20&amp;%20Tricks/A%20&amp;%20B.mov</ActualMediaFilePath></M>")
+        self.assertEqual(_media_path_candidates(xml),
+                         ["C:/Users/bhavi/Tips & Tricks/A & B.mov"])
+
+    def test_plain_windows_paths_are_still_found(self):
+        from src.core.project_probe import _media_path_candidates
+        xml = ("<M><ActualMediaFilePath>D:\\\\Footage\\\\Q&amp;A clip.mp4"
+               "</ActualMediaFilePath></M>")
+        self.assertEqual(_media_path_candidates(xml),
+                         ["D:\\\\Footage\\\\Q&A clip.mp4"])
+
+    def test_no_percent_encoded_path_ever_comes_out_of_a_link(self):
+        from src.core.project_probe import _media_path_candidates
+        xml = "<M>file:///E:/My%20Project/clip%20one.mov</M>"
+        for path in _media_path_candidates(xml):
+            self.assertNotIn("%20", path)
+
+
 if __name__ == "__main__":
     unittest.main()
