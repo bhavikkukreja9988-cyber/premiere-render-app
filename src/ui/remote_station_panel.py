@@ -25,14 +25,14 @@ logger = get_logger("ui.remote_station")
 
 
 class RemoteStationPanel(QWidget):
-    """Simple cloud station status/control and settings; no LAN controls."""
+    """Simple cloud station status/control; no LAN controls."""
 
     def __init__(self, config: AppConfig, get_worker=None) -> None:
         super().__init__()
         self.config = config
         self._get_worker = get_worker
-        self._worker = None
-        self._size_cache = {}
+        self._worker = None                 # latest worker seen by _refresh
+        self._size_cache = {}               # job_id -> (checked_at, text)
         self._build()
         self._load()
         self._timer = QTimer(self)
@@ -115,6 +115,9 @@ class RemoteStationPanel(QWidget):
         worker = self._get_worker() if self._get_worker else None
         self._refresh_jobs(worker)
         if worker is None or not getattr(worker, "started", False):
+            # This is THIS PC's status, not the other PCs'. It stays Offline
+            # until this PC has connected to the cloud, then goes Online on
+            # its own — even if no other PC has FileSender installed yet.
             self.status_label.setText(
                 f"<span style='color:{MUTED}'>Offline — waiting to connect "
                 "to the cloud</span>")
@@ -303,7 +306,7 @@ class RemoteStationPanel(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
-        _ok, message = worker.cancel_job(job_id)
+        ok, message = worker.cancel_job(job_id)
         self.jobs_hint.setText(message)
 
     def _clear_selected(self) -> None:
