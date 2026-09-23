@@ -36,8 +36,7 @@ def check_windows() -> bool:
         return line(GREEN, "Running on Windows")
     return line(
         RED, "Not running on Windows",
-        "The installer can only be built on a Windows PC.
-"
+        "The installer can only be built on a Windows PC.\n"
         "Copy this project to a Windows machine and run the build there.")
 
 
@@ -47,8 +46,7 @@ def check_python() -> bool:
         return line(GREEN, f"Python {major}.{minor} detected")
     return line(
         RED, f"Python {major}.{minor} is too old",
-        "Install Python 3.10 or newer from https://www.python.org/downloads/
-"
+        "Install Python 3.10 or newer from https://www.python.org/downloads/\n"
         "During install, tick 'Add python.exe to PATH'.")
 
 
@@ -69,8 +67,7 @@ def check_module(mod: str, install_hint: str) -> bool:
     except ImportError:
         return line(
             YELLOW, f"Python package '{mod}' is not installed yet",
-            f"The build script installs it automatically. To do it by hand:
-"
+            f"The build script installs it automatically. To do it by hand:\n"
             f"    pip install {install_hint}")
 
 
@@ -81,8 +78,7 @@ def check_pyside6() -> bool:
     except ImportError:
         return line(
             YELLOW, "PySide6 is not installed yet",
-            "The build script installs it automatically. To do it by hand:
-"
+            "The build script installs it automatically. To do it by hand:\n"
             "    pip install PySide6")
 
 
@@ -99,12 +95,9 @@ def check_inno() -> bool:
         return line(GREEN, "Inno Setup compiler (ISCC) found", found)
     return line(
         RED, "Inno Setup is not installed",
-        "The installer is built with Inno Setup 6 (free).
-"
-        "1. Download it from https://jrsoftware.org/isdl.php
-"
-        "2. Install it (default options are fine).
-"
+        "The installer is built with Inno Setup 6 (free).\n"
+        "1. Download it from https://jrsoftware.org/isdl.php\n"
+        "2. Install it (default options are fine).\n"
         "3. Re-run this check.")
 
 
@@ -114,8 +107,7 @@ def check_agent_present() -> bool:
         return line(GREEN, "Media Encoder agent script is present")
     return line(
         RED, "Media Encoder agent script is missing",
-        f"Expected at: {agent}
-"
+        f"Expected at: {agent}\n"
         "The project is incomplete; re-extract it from the ZIP.")
 
 
@@ -126,8 +118,7 @@ def check_spec_present() -> bool:
     if ok:
         return line(GREEN, "Installer scripts are present")
     return line(RED, "Installer scripts are missing",
-                f"Expected: {spec}
-          {iss}")
+                f"Expected: {spec}\n          {iss}")
 
 
 def check_icon_present() -> bool:
@@ -136,8 +127,7 @@ def check_icon_present() -> bool:
         return line(GREEN, "App icon is present")
     return line(
         RED, "App icon is missing",
-        f"Expected at: {icon}
-"
+        f"Expected at: {icon}\n"
         "The Inno Setup build step will fail without it. Re-extract the "
         "project or restore assets/FileSender.ico.")
 
@@ -167,9 +157,7 @@ def check_python_files_intact() -> bool:
         return line(GREEN, "All Python files are intact")
     return line(
         RED, "Damaged Python file(s) - the build would fail",
-        "
-".join(problems) + "
-"
+        "\n".join(problems) + "\n"
         "This almost always means a file was changed while being copied "
         "(for example code pasted into GitHub's web editor instead of the "
         "file being uploaded). Copy the file again from the update zip, "
