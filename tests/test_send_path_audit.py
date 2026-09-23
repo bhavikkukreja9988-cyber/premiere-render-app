@@ -364,6 +364,7 @@ class TestAmpersandPaths(unittest.TestCase):
             self.assertNotIn("&amp;", hits[0])
 
 
+
 class TestWindowsLinksCrossPlatform(unittest.TestCase):
     """Checks the path extraction itself, so it runs identically on Windows
     and Linux. The Windows-only failure was a C:/ path pattern matching
@@ -389,7 +390,6 @@ class TestWindowsLinksCrossPlatform(unittest.TestCase):
         xml = "<M>file:///E:/My%20Project/clip%20one.mov</M>"
         for path in _media_path_candidates(xml):
             self.assertNotIn("%20", path)
-
 
 
 if __name__ == "__main__":
