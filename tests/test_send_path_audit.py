@@ -379,7 +379,7 @@ class TestWindowsLinksCrossPlatform(unittest.TestCase):
 
     def test_plain_windows_paths_are_still_found(self):
         from src.core.project_probe import _media_path_candidates
-        xml = ("<M><ActualMediaFilePath>D:\\\\Footage\\\\Q&amp;A clip.mp4"
+        xml = ("<M><ActualMediaFilePath>D:\\Footage\\Q&amp;A clip.mp4"
                "</ActualMediaFilePath></M>")
         self.assertEqual(_media_path_candidates(xml),
                          ["D:\\Footage\\Q&A clip.mp4"])
@@ -391,5 +391,5 @@ class TestWindowsLinksCrossPlatform(unittest.TestCase):
             self.assertNotIn("%20", path)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__"
     unittest.main()
