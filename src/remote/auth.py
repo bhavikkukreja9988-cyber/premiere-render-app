@@ -110,11 +110,18 @@ class AuthService:
                 self._signed_in_family = normalised
                 logger.info("created a new family account")
                 return True
-            except Exception as exc:                          # noqa: BLE001
-                logger.error("could not create the family account: %s", exc)
+            except OfflineError:
+                logger.warning("cannot reach the cloud; will retry")
                 return False
-        except OfflineError:
-            logger.warning("offline; cannot sign in yet")
+            except Exception as exc:                          # noqa: BLE001
+                # Most common real cause: "Confirm email" is still switched on
+                # in Supabase, so the new account never gets a session.
+                logger.error("could not create the family account: %s "
+                             "(check that 'Confirm email' is OFF in Supabase)",
+                             exc)
+                return False
+        except OfflineError as exc:
+            logger.warning("cannot reach the cloud (%s); will retry", exc)
             return False
         except RemoteError as exc:
             logger.error("sign-in failed: %s", exc)
