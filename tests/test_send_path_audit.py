@@ -334,7 +334,7 @@ class TestAmpersandPaths(unittest.TestCase):
         return path.as_posix().replace(" ", "%20").replace("&", "&amp;")
 
     def make_project(self, root, media_path):
-        # Premiere writes media locations as file:// links (or C:\\ paths).
+        # Premiere writes media locations as file:// links (or C:\ paths).
         xml = (f"<PremiereData><Media><ActualMediaFilePath>file://{media_path}"
                "</ActualMediaFilePath></Media></PremiereData>").encode()
         prproj = root / "Edit.prproj"
@@ -380,10 +380,10 @@ class TestWindowsLinksCrossPlatform(unittest.TestCase):
 
     def test_plain_windows_paths_are_still_found(self):
         from src.core.project_probe import _media_path_candidates
-        xml = ("<M><ActualMediaFilePath>D:\\Footage\\Q&amp;A clip.mp4"
+        xml = ("<M><ActualMediaFilePath>D:\Footage\Q&amp;A clip.mp4"
                "</ActualMediaFilePath></M>")
         self.assertEqual(_media_path_candidates(xml),
-                         ["D:\\Footage\\Q&A clip.mp4"])
+                         ["D:\Footage\Q&A clip.mp4"])
 
     def test_no_percent_encoded_path_ever_comes_out_of_a_link(self):
         from src.core.project_probe import _media_path_candidates
@@ -392,5 +392,42 @@ class TestWindowsLinksCrossPlatform(unittest.TestCase):
             self.assertNotIn("%20", path)
 
 
+
+class TestSupabasePasswordLimit(unittest.TestCase):
+    """Supabase rejects passwords over 72 characters (bcrypt). The derived
+    family password was 77, so every account creation failed on the real
+    server with "Password cannot be longer than 72 characters" - while every
+    test passed, because the simulated Supabase didn't enforce the limit."""
+
+    def test_derived_password_fits_supabase_limit(self):
+        from src.remote.auth import MAX_PASSWORD_LENGTH, family_account_password
+        for code in ("292005", "smith family", "x" * 500, "Ümlaut café 家族"):
+            password = family_account_password(code)
+            self.assertLessEqual(len(password.encode("utf-8")),
+                                 MAX_PASSWORD_LENGTH, code)
+
+    def test_derived_password_meets_strictest_supabase_requirements(self):
+        # Supabase can optionally require lowercase, uppercase, digits and
+        # symbols. The password must pass even with all of them switched on.
+        from src.remote.auth import family_account_password
+        password = family_account_password("292005")
+        self.assertTrue(any(c.islower() for c in password))
+        self.assertTrue(any(c.isupper() for c in password))
+        self.assertTrue(any(c.isdigit() for c in password))
+        self.assertTrue(any(not c.isalnum() for c in password))
+        self.assertGreaterEqual(len(password), 6)   # Supabase minimum
+
+    def test_fake_supabase_rejects_long_passwords_like_the_real_one(self):
+        from src.remote.transport import AuthError
+        with self.assertRaises(AuthError):
+            FakeTransport().sign_up("a@b.local", "x" * 73)
+
+    def test_a_brand_new_family_code_can_create_its_account(self):
+        # End to end through the same checks the real server applies.
+        auth = AuthService(FakeTransport(), remote_config())
+        self.assertTrue(auth.ensure_signed_in("292005"))
+
+
 if __name__ == "__main__":
     unittest.main()
+
