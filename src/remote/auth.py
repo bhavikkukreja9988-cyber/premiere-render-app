@@ -52,7 +52,18 @@ def family_account_password(family_code: str) -> str:
     """
     normalised = normalise_family_code(family_code)
     digest = hashlib.sha256(f"filesender-password-v1:{normalised}".encode()).hexdigest()
-    return f"fs-family-v1-{digest}"
+    # Supabase (bcrypt) rejects passwords longer than 72 characters. The full
+    # 64-character digest plus a prefix came to 77 and every sign-up failed
+    # with "Password cannot be longer than 72 characters". 48 hex characters
+    # is still 192 bits - far more than enough.
+    # The "Fs1-" prefix supplies an uppercase letter, a digit and a symbol, so
+    # the password also passes Supabase's optional "password requirements"
+    # setting (lowercase + uppercase + digits + symbols) if it's ever enabled.
+    return f"Fs1-{digest[:48]}"
+
+
+#: Supabase's password limit (bcrypt only uses the first 72 bytes).
+MAX_PASSWORD_LENGTH = 72
 
 
 class AuthService:
@@ -114,11 +125,15 @@ class AuthService:
                 logger.warning("cannot reach the cloud; will retry")
                 return False
             except Exception as exc:                          # noqa: BLE001
-                # Most common real cause: "Confirm email" is still switched on
-                # in Supabase, so the new account never gets a session.
-                logger.error("could not create the family account: %s "
-                             "(check that 'Confirm email' is OFF in Supabase)",
-                             exc)
+                text = str(exc).lower()
+                if "session" in text or "confirm" in text:
+                    # Supabase created the account but returned no session:
+                    # "Confirm email" is still switched on.
+                    logger.error("could not create the family account: %s - "
+                                 "turn OFF 'Confirm email' in Supabase "
+                                 "(see docs/SUPABASE_CHECKLIST.txt, Step 3)", exc)
+                else:
+                    logger.error("could not create the family account: %s", exc)
                 return False
         except OfflineError as exc:
             logger.warning("cannot reach the cloud (%s); will retry", exc)
