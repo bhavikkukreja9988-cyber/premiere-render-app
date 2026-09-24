@@ -63,7 +63,7 @@ class FakeTransport(RemoteTransport):
         This returns a lightweight clone sharing all underlying data by
         reference (accounts, tables, buckets, realtime subscriptions — so
         writes from one client are visible to the other, exactly like one
-        real backend) but with its own, independent `_session`.
+        real backend) but with its own, independent ``_session``.
         """
         clone = FakeTransport.__new__(FakeTransport)
         clone._lock = self._lock
