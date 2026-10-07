@@ -1,3 +1,5 @@
+> **Historical record.** This note describes a clean-up made during the 3.0 work and is kept for history only. Parts of it are out of date (for example, there is no longer any username/password login). For the current state see `AI_HANDOFF.md`; for the next version see `docs/DESIGN_V4.md`.
+
 # Remote V3 cleanup status
 
 This file records the repository cleanup performed after the Remote V3 handoff was uploaded.

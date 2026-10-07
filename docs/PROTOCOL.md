@@ -1,22 +1,21 @@
-# FileSender Remote V3 Protocol
+# FileSender Protocol (3.x)
 
-Remote V3 uses authenticated Supabase database and private Storage operations over HTTPS. The production client does not use direct Sender-to-Station TCP or UDP discovery.
+Version 3.x uses authenticated Supabase database and private Storage operations over HTTPS. (Version 4.0 will move file transfer to direct PC-to-PC connections, with Supabase used for coordination only — see `DESIGN_V4.md`.)
 
 ## Authentication
 
-User-facing:
-
-```text
-Username + Password
-```
-
-The username is internally mapped to a synthetic email-shaped Supabase Auth identity. The synthetic address is never shown to users.
+There is no login screen. Each **family code** maps to its own Supabase account
+(`family-<hash>@filesender.local`, derived password of 52 characters), signed
+into silently; the first PC to use a code creates the account. See
+`AI_DEVELOPER_GUIDE.md` → Accounts and security.
 
 ## Station presence
 
-The Render Station registers a stable Station ID and periodically updates `status`, `last_seen`, `app_version`, and `capabilities`.
-
-The Sender treats a station as Online when its recent `last_seen` is within the configured timeout. Busy is separate and remains sendable.
+The Render Station registers a stable Station ID with its PC name and family
+code, then sends a heartbeat every 15 seconds. Supabase stamps `last_seen`
+with its own clock (migration 007), and every PC compares against Supabase's
+clock, so differences between PC clocks don't matter. A PC is Online when its
+`last_seen` is within 45 seconds. Busy is separate and remains sendable.
 
 ## Job lifecycle
 
@@ -60,6 +59,12 @@ The Render Station uploads the finished output and records its SHA-256. The Send
 
 The station has an independent recovery sweep in addition to status polling. A missed status update should not permanently strand a queued job.
 
+The app reconnects by itself after a network loss (retrying after 5, 10, 20, 30
+and then every 60 seconds) and renews an expired session automatically.
+
+Cloud files are temporary: removed when a job completes, when a send fails or
+is cancelled, and by a family-wide sweep 10 minutes after any job ends.
+
 The Sender re-polls job state while waiting for the result and retries transient errors.
 
 If the station is Offline before job creation, Send is blocked. If it goes Offline after a job exists, the cloud job remains recoverable.
@@ -68,6 +73,9 @@ If the station is Offline before job creation, Send is blocked. If it goes Offli
 
 Database rows are protected by RLS. Storage buckets are private. Client code must never contain a service-role/secret key or database password.
 
-## Legacy
+## History
 
-The previous framed TCP protocol, UDP discovery and pairing authentication are historical reference only. They are not part of the Remote V3 runtime.
+The original LAN version used a framed TCP protocol, UDP discovery and pairing
+codes; that code has been removed. Version 4.0 reintroduces **direct**
+connections in a new form (hole punching coordinated through Supabase, no
+manual IPs, ports or pairing codes) — see `DESIGN_V4.md`.

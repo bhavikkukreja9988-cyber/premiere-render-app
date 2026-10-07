@@ -5,7 +5,7 @@
 
 #define AppName "FileSender"
 #define AppPublisher "FileSender"
-#define AppVersion "3.2.0"
+#define AppVersion "3.3.0"
 #define AppExeName "FileSender.exe"
 #define BuildDir "..\build_app\FileSender"
 #define AppIcon "..\assets\FileSender.ico"

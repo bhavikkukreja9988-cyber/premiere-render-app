@@ -55,6 +55,13 @@ def setup_logging(level: str = "INFO", log_dir: Optional[str] = None) -> None:
         root = logging.getLogger()
         root.setLevel(level.upper())
 
+        # The web libraries log EVERY request at INFO ("HTTP Request: GET
+        # ...", about two lines a second), which buried everything useful in
+        # the log. Only their warnings and errors are kept; FileSender's own
+        # messages still say what it's doing.
+        for noisy in ("httpx", "httpcore", "hpack", "h2", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+
         stream = logging.StreamHandler()
         stream.setFormatter(fmt)
         root.addHandler(stream)

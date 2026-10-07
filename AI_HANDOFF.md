@@ -1,67 +1,80 @@
-# FileSender Remote V3 — Developer Handoff
+# FileSender — Developer Handoff
 
-This branch contains the current Remote V3 production tree for FileSender.
+Read this first, then `AI_DEVELOPER_GUIDE.md`. The agreed plan for the next
+major version is in `docs/DESIGN_V4.md`.
 
-## Product architecture
+## Where things stand (version 3.3.0)
 
-- Sender and Render Station can be on different networks and locations.
-- Supabase is the production transport/control plane.
-- Rendering happens locally on the Render Station with Adobe Media Encoder.
-- The app is online only while FileSender is open; closing it stops the station worker/heartbeat.
+FileSender sends Premiere Pro projects between PCs in **different houses**,
+renders them with Adobe Media Encoder on the receiving PC, and returns the
+video. In 3.x, Supabase carries everything: accounts, presence, jobs and the
+files themselves.
 
-## User-facing rules
+### Proven on the real Windows PC with the live Supabase project
 
-Sender:
-- Username + password only.
-- No email, pairing code, IP address, or port entry.
-- Render Stations are selected by name and cloud status.
-- SEND is disabled when the selected station is offline.
-- Busy stations can receive jobs and queue them.
-- `.prproj` files and Premiere project folders can be dragged in.
-- The same project can be sent repeatedly; each send is a new job.
-- The original project is never modified or permanently duplicated.
+Taken from real application logs — nothing here is assumed:
 
-Render Station:
-- Opening FileSender makes the station online automatically.
-- Closing FileSender makes it offline.
-- No Go Online / Go Offline controls.
-- No pairing-code UI.
-- Local project storage and retention are configurable.
-- `Accept incoming jobs automatically` controls automatic job acceptance.
+- Installer builds and installs (`FileSender.exe`); the automated tests pass on
+  Windows as part of that build.
+- Silent sign-in to the family account (no login screen).
+- Station registration and the 15-second heartbeat.
+- The shared server clock (`server_time()` from migration 007) answers.
+- Adobe Media Encoder 2026 is detected and the render backend starts.
+- Closing the app marks the station offline.
 
-## Production source boundaries
+### NOT yet proven (only covered by automated tests)
 
-```text
-src/core/      pure application logic
-src/remote/    Supabase auth, station, job, storage and transfer logic
-src/render/    Adobe Media Encoder integration
-src/ui/        PySide6 UI
-supabase/      reproducible database/RLS/realtime/storage migrations
-tests/         active production tests
-installer/     PyInstaller + Inno Setup
-assets/        FileSender branding
-```
+- A real send between two PCs — the second PC isn't set up yet.
+- A real render returning a video.
+- The uninstaller's clean-up dialog.
+- A direct PC-to-PC connection between the two houses — run
+  `tools/connection_test.py` (see `docs/CONNECTION_TEST_GUIDE.txt`) on both
+  PCs first; its result decides how 4.0 is built.
 
-Legacy LAN source is not part of the production runtime. Do not restore direct TCP, UDP discovery, pairing, or manual IP/port controls.
+## Product rules (still binding)
 
-## Current validation status
+- **No login screen.** Setup asks only for a PC name and a family code.
+- The user never enters an IP address, port or pairing code.
+- Every PC can send and render; there are no "Go Online/Offline" controls.
+- A PC never appears in its own send list.
+- The same project can be sent any number of times; each send is a new job.
+- The sender's original project is never modified, moved or duplicated.
+- Never put a Supabase secret/service-role key or database password in the app
+  or the repository.
 
-The latest AI checkpoint reported 103 automated tests passing. The repository maintainer also verified that the active Python source compiles with `python -m compileall -q src tests scripts`.
+## What changed since 3.2.0 (all covered by tests)
 
-That does NOT prove:
+- Family-code accounts: a deterministic per-family Supabase account; the
+  derived password is 52 characters (Supabase rejects more than 72).
+- Reconnects automatically after network loss and after an expired session.
+- Online status uses Supabase's clock (PCs with wrong clocks no longer look
+  offline); station-ID clashes after a family-code change are fixed
+  automatically.
+- Failed/cancelled jobs are cleaned up (cloud files after 10 minutes, local
+  files after the retention period); Render Station tab has a job list with
+  Cancel render / Clear selected job.
+- Clear error messages for storage-full and setup problems; a warning before
+  sending a project too big for the free plan.
+- Media paths containing "&" or URL-encoded spaces are read correctly.
+- Logs start fresh each launch, can be saved from the Log tab, and no longer
+  record every web request.
+- `scripts/verify_update.py` + `scripts/update_manifest.txt` check that copied
+  files arrived unchanged; `scripts/preflight.py` (build step 1) rejects any
+  damaged Python file with its exact line.
+- `tools/connection_test.py`: the direct-connection test for 4.0.
 
-- live Supabase authentication/RLS
-- real Storage transfer
-- two-network operation
-- Windows/PySide6 UI behavior
-- real Premiere Pro / Media Encoder automation
-- final installer install/uninstall
+## Next steps
 
-Those remain release-gate tests.
+1. Run the connection test on both PCs and record the result.
+2. Build 4.0 as described in `docs/DESIGN_V4.md` on a new branch
+   (`feature/v4-direct`), keeping this branch as a working fallback.
+3. The Premiere Pro plugin waits until 4.0 works.
 
-## Handoff rule
+## Working rules
 
-The Other AI writes code and provides complete ZIPs/change reports.
-The repository maintainer uploads/organizes GitHub and handles merges.
-
-Do not claim GitHub or live-service testing unless it actually happened.
+- The developer AI writes code, runs the tests and delivers ZIPs with apply
+  notes and an updated `scripts/update_manifest.txt`.
+- The repository maintainer uploads to GitHub **as files** (never by pasting
+  contents) and runs `python scripts\verify_update.py`.
+- Never claim something was tested live unless a real log or screenshot shows
+  it.

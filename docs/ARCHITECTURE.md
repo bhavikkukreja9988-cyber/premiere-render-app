@@ -122,13 +122,14 @@ Remote V3 uses `last_seen`/heartbeat as the source of truth for station availabi
 
 ## Security
 
-- Supabase Auth identifies the signed-in account.
-- RLS isolates account-owned database rows.
+- Each family code is its own Supabase account (signed in silently).
+- RLS isolates account-owned database rows, so families can't see each other.
 - Storage buckets are private.
 - Storage object paths include authenticated user ID and Job ID.
 - Files are validated and SHA-256 verified.
-- No direct TCP/UDP path is exposed to the public internet.
+- In 3.x no direct TCP/UDP path is exposed to the internet. 4.0 adds direct,
+  encrypted PC-to-PC transfer authorised through Supabase (`DESIGN_V4.md`).
 
 ## Legacy
 
-The old LAN implementation is historical/reference material only. It is not part of the Remote V3 runtime and must not be restored as the production transport.
+The old LAN implementation (manual IPs, ports, pairing codes) has been removed and must not come back. Version 4.0's direct transfer is a different design — automatic, coordinated through Supabase, with no manual network settings — described in `DESIGN_V4.md`.

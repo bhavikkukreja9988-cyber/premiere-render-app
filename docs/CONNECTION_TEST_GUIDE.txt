@@ -1,0 +1,116 @@
+=====================================================================
+  FILESENDER - CONNECTION TEST GUIDE
+  Can your two PCs connect DIRECTLY? (about 10 minutes)
+=====================================================================
+
+WHY
+  FileSender 4.0 will send files straight from one PC to the other,
+  instead of through Supabase (no 1 GB / 5 GB limits). Home routers
+  don't normally accept incoming connections, so a trick called
+  "hole punching" is used: both PCs reach out at the same time. It
+  works on most home internet, but not all. This test tells us whether
+  it works between YOUR two houses, before anything is rebuilt.
+
+  Nothing is installed or changed. No files are shared. Only tiny test
+  messages are sent.
+
+YOU NEED
+  - Both PCs switched on, each on its normal internet connection
+    (don't use a mobile hotspot unless that's what it normally uses)
+  - A way to send a short code between the two PCs: WhatsApp, email,
+    or a phone call is fine.
+  - Someone at each PC (or remote access) at the same time.
+
+
+---------------------------------------------------------------------
+STEP 1 - BUILD THE TEST (on the PC with the FileSender repo)
+---------------------------------------------------------------------
+  DO      Double-click:  scripts\build_connection_test.bat
+
+  EXPECT  "[ ok ] Built: dist_tools\FileSender-ConnectionTest.exe"
+
+  Copy that ONE file to both PCs (USB stick, Google Drive, WhatsApp
+  as a document - anything).
+
+
+---------------------------------------------------------------------
+STEP 2 - START IT ON BOTH PCs
+---------------------------------------------------------------------
+  DO      Double-click FileSender-ConnectionTest.exe on each PC.
+
+  IF      Windows says "Windows protected your PC":
+          click "More info" -> "Run anyway". (It's unsigned because
+          we built it ourselves.)
+
+  IF      Windows Firewall asks whether to allow it:
+          tick BOTH "Private" and "Public" networks -> "Allow access".
+          Blocking it would make the test fail for the wrong reason.
+
+  DO      Type a name for the PC (e.g. Bhavik) and press Enter.
+
+  EXPECT  Within about 30 seconds, a network check result:
+
+            GOOD         - this PC's network suits a direct connection
+            HARD         - this PC's network makes it difficult
+            UNSURE       - couldn't be measured; do Step 3 anyway
+            NO INTERNET  - check the connection and start again
+
+
+---------------------------------------------------------------------
+STEP 3 - SWAP CODES
+---------------------------------------------------------------------
+  Each PC shows "YOUR CODE", a long line starting with FS1-.
+
+  The code is copied to the clipboard automatically.
+
+  DO      1. On PC 1: paste it (Ctrl+V) into WhatsApp/email and send it
+             to PC 2.
+          2. On PC 2: do the same - send its code to PC 1.
+          3. On EACH PC: copy the OTHER PC's code from the message, click
+             in the black window, press Ctrl+V after "Other PC's code:",
+             then press Enter.
+
+  If Ctrl+V doesn't paste in the black window, right-click inside it
+  instead (older Windows consoles paste with a right-click).
+
+  TIP     Do both pastes within a minute or two of each other. Each PC
+          keeps trying for 2 minutes after its paste.
+
+  CAREFUL Your OWN code is on the clipboard, so Ctrl+V in the window
+          pastes the wrong one. Copy the other PC's code from the
+          WhatsApp message first. (The test notices and warns you.)
+
+  EXPECT  "SUCCESS - connected direct over ..."  on both PCs.
+
+  IF      It says FAILED: press Enter on BOTH PCs at about the same
+          time to try again with the same codes. Try at least twice
+          before concluding it doesn't work.
+
+
+---------------------------------------------------------------------
+STEP 4 - SEND BACK THE RESULTS
+---------------------------------------------------------------------
+  Each PC saves a file named like:
+
+      FileSender-connection-test-20260925-101500.txt
+
+  next to the .exe (or on the Desktop). Send BOTH files back.
+
+
+---------------------------------------------------------------------
+WHAT THE RESULT MEANS FOR FILESENDER 4.0
+---------------------------------------------------------------------
+  SUCCESS on both PCs
+      Direct transfer works between your houses. Projects of any size
+      can go straight from PC to PC.
+
+  FAILED
+      A direct connection isn't possible between these two networks
+      (usually the internet provider shares one address between many
+      customers). FileSender 4.0 would then use the agreed fallback:
+      Supabase storage, for small projects only. It's worth running
+      the test once more before concluding this - and trying it again
+      on a different internet connection at either house, if there is
+      one, can show which side is the difficult one.
+
+  Either way, the two result files are all that's needed.

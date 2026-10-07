@@ -91,6 +91,19 @@ class TestFreshLogPerRun(LogRotationTestCase):
         self.assertIn("starting", self.read("app.log"))
 
 
+class TestQuietWebLibraries(LogRotationTestCase):
+    def test_every_request_is_no_longer_logged(self):
+        # A real log was ~2 "HTTP Request: GET ..." lines per second.
+        self.run_app_launch("hello")
+        logging.getLogger("httpx").info('HTTP Request: GET https://x "200 OK"')
+        logging.getLogger("httpx").warning("connection problem")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        text = self.read("app.log")
+        self.assertNotIn("HTTP Request", text)
+        self.assertIn("connection problem", text)     # problems still logged
+
+
 class TestLogPaths(LogRotationTestCase):
     def test_path_helpers_point_at_the_right_files(self):
         import src.core.log as log

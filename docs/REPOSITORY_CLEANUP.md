@@ -1,3 +1,5 @@
+> **Historical record.** This note describes a clean-up made during the 3.0 work and is kept for history only. Parts of it are out of date (for example, there is no longer any username/password login). For the current state see `AI_HANDOFF.md`; for the next version see `docs/DESIGN_V4.md`.
+
 # Repository organization — Remote V3
 
 The repository is organized around the production Remote V3 architecture.

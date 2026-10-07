@@ -141,7 +141,7 @@ def check_python_files_intact() -> bool:
     line straight away.
     """
     problems = []
-    for folder in ("src", "tests", "scripts"):
+    for folder in ("src", "tests", "scripts", "tools"):
         for path in sorted((REPO_ROOT / folder).rglob("*.py")):
             try:
                 source = path.read_text(encoding="utf-8")

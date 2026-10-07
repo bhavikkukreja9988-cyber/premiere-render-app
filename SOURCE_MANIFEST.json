@@ -1,12 +1,14 @@
 {
   "product": "FileSender",
-  "version": "3.0.1",
-  "architecture": "Remote V3 / Supabase",
+  "version": "3.3.0",
+  "architecture": "3.x: Supabase transport (accounts, presence, jobs, temporary files). 4.0 planned: direct PC-to-PC transfer, see docs/DESIGN_V4.md",
   "production_source": ["src/core", "src/remote", "src/render", "src/ui"],
+  "tools": ["tools/connection_test.py"],
   "installer": ["installer/PremiereRenderApp.spec", "installer/FileSender.iss"],
-  "database": "supabase/migrations",
+  "database": "supabase/migrations (001-007)",
   "tests": "tests",
   "documentation": "docs",
   "assets": "assets/FileSender.ico",
-  "notes": "Only the production source tree is packaged. Legacy LAN code is historical only and is not part of the Remote V3 runtime. Build artifacts, virtual environments, secrets, session files, and Python bytecode are excluded by .gitignore."
+  "integrity": "scripts/update_manifest.txt + scripts/verify_update.py",
+  "notes": "Build artifacts, virtual environments, secrets, session files and Python bytecode are excluded by .gitignore. Never commit Supabase secret/service-role keys or the database password."
 }

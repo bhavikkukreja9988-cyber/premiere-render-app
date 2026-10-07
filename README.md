@@ -1,147 +1,97 @@
 # FileSender
 
-FileSender is a Windows desktop app for sending Adobe Premiere Pro projects to a remote Render Station, rendering them with Adobe Media Encoder, and receiving the finished MP4 back.
+A Windows desktop app for families: send an Adobe Premiere Pro project from one
+PC to another PC (the **Render Station**) in a different house, render it there
+with Adobe Media Encoder, and get the finished video back automatically.
 
-The Sender and Render Station can be in completely different locations and on different networks. The normal product uses Supabase over the internet; it does not require LAN discovery, direct TCP connections, IP entry, port forwarding, or pairing codes.
+**Current version: 3.3.0** (Supabase transport). The next major version,
+**4.0**, sends files directly PC-to-PC — see [`docs/DESIGN_V4.md`](docs/DESIGN_V4.md).
 
-## Normal workflow
+## Using it
 
-### Sender
+**Setting up a PC (once)**
 
-1. Open FileSender and sign in with a username and password.
-2. Choose a Render Station shown by name.
-3. The station must be **Online** before **SEND** is enabled.
-4. Drag a `.prproj` file or a Premiere project folder into the drop area.
-5. Review the detected sequence/preset and output location.
-6. Click **SEND**.
-7. The project uploads, renders on the selected station, and the MP4 returns automatically.
+1. Install `FileSender.exe` and open it.
+2. Enter a **name for this PC** (different on every PC) and a **family code**
+   (the **same** on every PC in your household). That's all — there is no
+   username, password, or login screen.
+3. Choose where received projects are stored and how long finished or failed
+   jobs are kept (7 days by default).
 
-The Sender never needs the station's IP address, port, pairing code, or a manually created ZIP. The same project may be sent repeatedly; every send creates a separate Job.
+Every PC can both send and render. Opening FileSender puts the PC online;
+closing it takes it offline.
 
-### Render Station
+**Sending a project**
 
-1. Install FileSender on the PC that has Premiere Pro / Adobe Media Encoder.
-2. Sign in with the family username and password.
-3. Enable the Render Station role.
-4. Choose the local project-storage location.
-5. Optionally enable **Accept incoming jobs automatically**.
-6. Leave FileSender open when you want the PC to be available for rendering.
+1. Drag a Premiere project folder or `.prproj` onto the **Send a project** tab.
+2. Pick the PC to render on. Only **other** PCs with your family code are
+   listed.
+3. Pick a sequence, preset and output name, then **Send**.
+4. Progress is shown live; the finished video downloads to your output folder.
+   If a send fails, the reason is shown with a **Retry** button.
 
-Opening FileSender makes the station online automatically. Closing FileSender stops its cloud worker and heartbeat and marks it offline. There is no normal-use **Go Online**, **Go Offline**, or pairing-code workflow.
+**On the rendering PC**, the **Render Station** tab lists received jobs with
+their progress, and lets you **Cancel render** or **Clear** a failed/stuck job.
 
-## Important behavior
+**If something goes wrong:** Log tab → **Save log to file…**, and send the
+file. The log starts fresh every time FileSender opens.
 
-- **Offline station:** SEND is disabled and the worker re-checks station availability immediately before creating the cloud job.
-- **Busy station:** a busy station remains sendable; jobs queue behind existing work.
-- **Repeated sends:** identical projects are never rejected just because their hashes match. Each send is a new Job.
-- **Sender originals:** the original project is never modified, moved, or permanently duplicated by FileSender.
-- **Render workspaces:** each job gets an isolated local workspace on the Render Station.
-- **Cleanup:** completed received projects can be removed automatically according to the Render Station retention setting. Cloud transfer files are temporary transport data.
-- **Result delivery:** returned MP4 files are checksum-verified before the job is marked complete.
+## Important limits (Supabase free plan)
 
-## Architecture
+In 3.x every project passes through Supabase Storage:
+
+- **1 GB of stored files in total** — projects over about 1 GB can't be sent.
+  FileSender warns when you pick one that large.
+- **5 GB of downloads per month** (the render PC's download and yours both count).
+- **Projects pause after ~7 days of low activity** — restore from the dashboard.
+
+Version 4.0 removes the file-size limits by sending files directly between PCs.
+
+## How it works (3.x)
 
 ```text
-Sender PC
-   |
-   | HTTPS / authenticated API
-   v
-Supabase
-   |-- Auth
-   |-- Postgres jobs/stations/events
-   |-- Private Storage
-   |-- Presence/status polling
-   v
-Render Station PC
-   |
-   v
-Local job workspace
-   |
-   v
-Adobe Media Encoder
-   |
-   v
-Rendered MP4
-   |
-   v
-Supabase Storage
-   |
-   v
-Sender downloads and verifies result
+Sender PC ──HTTPS──► Supabase (accounts, PCs online, jobs, temporary files)
+                          │
+                          ▼
+                  Render Station PC ──► local job folder ──► Media Encoder
+                          │
+                          └── rendered video ──► Supabase ──► Sender PC
 ```
 
-The old V2 LAN implementation is historical reference only and is not part of the Remote V3 production path.
+Each family code is its own Supabase account; the database's Row Level
+Security keeps families apart. Cloud files are temporary and deleted once a
+job is delivered, failed or cancelled.
 
 ## Repository layout
 
 ```text
-src/
-  core/              business logic, manifests, jobs, workspace, retention
-  remote/            Supabase auth, stations, jobs, storage, transport
-  render/            Media Encoder integration and render queue
-  ui/                PySide6 desktop UI
-
-supabase/
-  migrations/        reproducible database/RLS/realtime/storage setup
-  functions/         backend functions only when required
-
-assets/              FileSender.ico
-
-tests/               automated core + remote tests
-scripts/             Windows build and preflight scripts
-installer/           PyInstaller + Inno Setup configuration
-docs/                architecture, setup, build, health, and release docs
+src/core/      business logic: config, jobs, manifests, retention, logging
+src/remote/    Supabase: accounts, stations, jobs, storage, transfers
+src/render/    Adobe Media Encoder integration (JSX agent, render queue)
+src/ui/        PySide6 desktop UI
+supabase/      database setup (migrations 001-007)
+tools/         connection_test.py - checks two PCs can connect directly (for 4.0)
+tests/         automated tests (no network, PySide6 or Adobe needed)
+scripts/       build, preflight and file-integrity scripts
+installer/     PyInstaller + Inno Setup (needs Inno Setup 6.6 or newer)
+assets/        FileSender.ico
+docs/          setup, design and release documents
 ```
 
-## Build the Windows installer
+## For developers
 
-On a Windows build PC, run:
+Start with [`AI_HANDOFF.md`](AI_HANDOFF.md) (current state) and
+[`AI_DEVELOPER_GUIDE.md`](AI_DEVELOPER_GUIDE.md) (rules and architecture).
 
 ```text
-scripts\build_installer.bat
+python -m unittest discover -s tests -t .     # run the tests
+scripts\build_installer.bat                   # build dist_installer\FileSender.exe
+python scripts\verify_update.py               # check copied files arrived intact
 ```
 
-The script prepares dependencies, runs the automated tests, builds the PyInstaller application, and creates:
+Supabase setup and checks: [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md)
+and [`docs/SUPABASE_CHECKLIST.txt`](docs/SUPABASE_CHECKLIST.txt).
+Windows setup for users: [`docs/SETUP_WINDOWS.md`](docs/SETUP_WINDOWS.md).
 
-```text
-dist_installer\FileSender.exe
-```
-
-That installer is what normal Sender and Render Station users install. They do not need Python or developer tools.
-
-See [`docs/BUILD_GUIDE.md`](docs/BUILD_GUIDE.md) for the complete Windows build procedure.
-
-## Supabase setup
-
-The project is configured for the existing File Sender Supabase project using the public project URL and publishable key in `src/remote/config.py`.
-
-Before the first live test, apply the migrations in `supabase/migrations/` using [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md).
-
-Never place a Supabase secret/service-role key, database password, or other privileged credential in the desktop application or repository.
-
-## Testing
-
-Run:
-
-```text
-python -m unittest discover -s tests -t .
-```
-
-The automated suite is designed not to require a live Supabase connection, PySide6, or Adobe software. Passing those tests does not prove the live network, real Windows UI, or real Media Encoder integration.
-
-## Release readiness
-
-Before merging Remote V3 into `main`, verify:
-
-- Live Supabase username/password authentication
-- RLS and private Storage access
-- Sender ↔ Render Station on two different networks
-- Offline SEND blocking
-- Large-file/resumable transfer
-- Repeated sends of the same project
-- Real Premiere Pro / Adobe Media Encoder rendering
-- Automatic result return and checksum verification
-- Retention and delete-after-delivery
-- FileSender.exe installation and Windows uninstall
-
-See [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+Never put a Supabase secret/service-role key or the database password in the
+app or the repository — only the public URL and publishable key belong here.

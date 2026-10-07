@@ -28,7 +28,8 @@ section at the bottom covers the common cases.
 ### 2. Inno Setup (the tool that makes the installer)
 
 1. Go to <https://jrsoftware.org/isdl.php>
-2. Download **“Inno Setup 6”** (the stable version).
+2. Download **“Inno Setup 6”** — version **6.6.0 or newer** is required (older
+   versions fail to compile the uninstaller's clean-up dialog).
 3. Run it and click through with the default options.
 
 That’s everything. You never touch these two again.
@@ -111,6 +112,10 @@ Exactly like any other program — no commands, no scripts:
 **“Python was not found” / “‘python’ is not recognized.”**
 Python isn’t on PATH. Reinstall Python and make sure you tick
 **“Add python.exe to PATH”** on the first screen, then try again.
+
+**“Invalid number of parameters” on a `CreateCustomForm` line.**
+Your Inno Setup is older than 6.6.0. Update it from
+<https://jrsoftware.org/isdl.php> and build again.
 
 **“Inno Setup compiler (ISCC) not found.”**
 Install Inno Setup 6 from <https://jrsoftware.org/isdl.php> and re-run the
